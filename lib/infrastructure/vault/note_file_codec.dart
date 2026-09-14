@@ -17,6 +17,7 @@ class NoteFileCodec {
       ..writeln('schema: ${jsonEncode(schema)}')
       ..writeln('type: ${jsonEncode(type)}')
       ..writeln('id: ${jsonEncode(note.id)}')
+      ..writeln('title: ${jsonEncode(note.title)}')
       ..writeln('folder: ${jsonEncode(note.folder)}')
       ..writeln(
         'created_at: ${jsonEncode(note.createdAt.toUtc().toIso8601String())}',
@@ -60,6 +61,7 @@ class NoteFileCodec {
     return Note(
       id: _string(loaded, 'id'),
       body: split.$2,
+      title: _optionalString(loaded, 'title') ?? '',
       folder: _optionalString(loaded, 'folder') ?? '',
       createdAt: _date(loaded, 'created_at'),
       updatedAt: _date(loaded, 'updated_at'),

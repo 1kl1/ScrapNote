@@ -12,6 +12,8 @@ import 'package:scrapnote/app/scrapnote_theme.dart';
 import 'package:scrapnote/features/notes/note_controller.dart';
 import 'package:scrapnote/features/notes/notes_workspace.dart';
 import 'package:scrapnote/features/editor/inline_image.dart';
+import 'package:scrapnote/features/editor/scrap_embed.dart';
+import 'package:scrapnote/domain/scrap.dart';
 
 void main() {
   testWidgets('capture the hierarchical Notes workspace with an inline image', (
@@ -23,6 +25,13 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final folder = Directory.systemTemp.createTempSync('scrapnote-review-');
     addTearDown(() => folder.deleteSync(recursive: true));
+    final sample = Scrap(
+      id: 'ridge',
+      body:
+          '# From the ridge\n\nWarm light reached the path before the city woke up.',
+      createdAt: DateTime.utc(2026, 9, 13),
+      updatedAt: DateTime.utc(2026, 9, 13),
+    );
     final notes = NoteController();
     addTearDown(notes.dispose);
     await tester.runAsync(() async {
@@ -41,9 +50,10 @@ void main() {
       final assets = packages.cast<Map>().singleWhere(
         (p) => p['name'] == 'forui_assets',
       );
-      final font = config.uri
-          .resolve(assets['rootUri'] as String)
-          .resolve('assets/lucide.ttf');
+      final packageRoot = config.uri.resolve(assets['rootUri'] as String);
+      final font = Uri.directory(
+        packageRoot.toFilePath(),
+      ).resolve('assets/lucide.ttf');
       final icons = FontLoader('packages/forui_assets/ForuiLucideIcons')
         ..addFont(
           File.fromUri(font).readAsBytes().then((b) => ByteData.sublistView(b)),
@@ -85,11 +95,13 @@ void main() {
       await notes.createFolder('Travel');
       await notes.createFolder('Seoul');
       notes.newDocument();
+      notes.updateTitle('Morning walk in Seoul');
       notes.updateBody(
-        'Morning walk\n\nA quiet path above the city.\n${InlineImage.markdown(imageFile.path, label: 'Mountain view')}\n\nKeep this view beside the observations from today.',
+        'Morning walk\n\nA **quiet path** above the city. This long observation wraps naturally while keeping just one line number in the gutter.\n${InlineImage.markdown(imageFile.path, label: 'Mountain view')}\n${ScrapEmbed.wrap(sample, sample.body)}\nKeep this view beside the observations from today.',
       );
       notes.addAttachment(imageFile.path);
       await notes.saveActive();
+      notes.editActive();
     });
     final text = TextEditingController(text: notes.activeDocument!.body);
     addTearDown(text.dispose);
@@ -104,17 +116,21 @@ void main() {
             onSectionChanged: (_) {},
             vaultPath: folder.path,
             onChooseVault: () {},
-            body: NotesWorkspace(
-              noteController: notes,
-              textController: text,
-              onCreateFolder: () {},
-              onCreateNote: () {},
-              onSave: () {},
-              onCloseTab: (_) {},
-              onChooseImages: () {},
-              onPasteImage: () {},
-              onImagesDropped: (_) {},
-              onRemoveImage: (_) {},
+            body: ListenableBuilder(
+              listenable: notes,
+              builder: (context, _) => NotesWorkspace(
+                scraps: [sample],
+                noteController: notes,
+                textController: text,
+                onCreateFolder: () {},
+                onCreateNote: () {},
+                onSave: () {},
+                onCloseTab: (_) {},
+                onChooseImages: () {},
+                onPasteImage: () {},
+                onImagesDropped: (_) {},
+                onRemoveImage: (_) {},
+              ),
             ),
           ),
         ),
@@ -128,16 +144,21 @@ void main() {
     }
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    await tester.runAsync(() async {
+    Future<void> capture(String name) => tester.runAsync(() async {
       final image =
           await (boundary.currentContext!.findRenderObject()
                   as RenderRepaintBoundary)
               .toImage();
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      final output = File('build/review/notes-inline.png');
+      final output = File('build/review/$name.png');
       await output.parent.create(recursive: true);
       await output.writeAsBytes(bytes!.buffer.asUint8List());
       image.dispose();
     });
+    await capture('notes-numbered-editor');
+    await tester.runAsync(notes.saveActive);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await capture('notes-saved-document');
   });
 }

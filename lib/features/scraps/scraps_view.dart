@@ -1,8 +1,6 @@
 // Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V4
 // design-system: DESIGN.md · designed-as-app · Index-First editor shell
 
-import 'dart:math' as math;
-
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -460,22 +458,13 @@ class _DocumentWorkspace extends StatelessWidget {
                 : _EditorDropSurface(
                     enabled: !saving && onImagesDropped != null,
                     onDropped: onImagesDropped,
-                    child: ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: controller,
-                      builder: (context, value, _) =>
-                          InlineImage.pattern.hasMatch(value.text)
-                          ? InlineDocumentEditor(
-                              controller: controller,
-                              imageDirectory: imageDirectory,
-                              enabled: !saving,
-                              onRemoveImage: onRemoveImage,
-                              editorKey: const ValueKey<String>('scrap-editor'),
-                            )
-                          : _LineNumberEditor(
-                              controller: controller,
-                              scrollController: editorScrollController,
-                              enabled: !saving,
-                            ),
+                    child: InlineDocumentEditor(
+                      key: ValueKey(activeTabId),
+                      controller: controller,
+                      imageDirectory: imageDirectory,
+                      enabled: !saving,
+                      onRemoveImage: onRemoveImage,
+                      editorKey: const ValueKey<String>('scrap-editor'),
                     ),
                   ),
           ),
@@ -693,151 +682,6 @@ class _NoOpenDocument extends StatelessWidget {
         onPress: onCreate,
         prefix: const Icon(FLucideIcons.filePlus2, size: 16),
         child: const Text('New scrap'),
-      ),
-    );
-  }
-}
-
-class _LineNumberEditor extends StatefulWidget {
-  const _LineNumberEditor({
-    required this.controller,
-    required this.scrollController,
-    required this.enabled,
-  });
-
-  final TextEditingController controller;
-  final ScrollController scrollController;
-  final bool enabled;
-
-  @override
-  State<_LineNumberEditor> createState() => _LineNumberEditorState();
-}
-
-class _LineNumberEditorState extends State<_LineNumberEditor> {
-  static const double _fontSize = 15;
-  static const double _lineHeight = 1.6;
-  static const double _lineExtent = _fontSize * _lineHeight;
-  static const double _topPadding = 22;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.controller.addListener(_redraw);
-    widget.scrollController.addListener(_redraw);
-  }
-
-  @override
-  void didUpdateWidget(covariant _LineNumberEditor oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.removeListener(_redraw);
-      widget.controller.addListener(_redraw);
-    }
-    if (oldWidget.scrollController != widget.scrollController) {
-      oldWidget.scrollController.removeListener(_redraw);
-      widget.scrollController.addListener(_redraw);
-    }
-  }
-
-  @override
-  void dispose() {
-    widget.controller.removeListener(_redraw);
-    widget.scrollController.removeListener(_redraw);
-    super.dispose();
-  }
-
-  void _redraw() {
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final lineCount = math.max(
-      1,
-      '\n'.allMatches(widget.controller.text).length + 1,
-    );
-    final scrollOffset = widget.scrollController.hasClients
-        ? widget.scrollController.offset
-        : 0.0;
-    return ColoredBox(
-      color: ScrapnoteTokens.paper,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          SizedBox(
-            width: 58,
-            child: ClipRect(
-              child: OverflowBox(
-                alignment: Alignment.topCenter,
-                minHeight: 0,
-                maxHeight: double.infinity,
-                child: Transform.translate(
-                  offset: Offset(0, _topPadding - scrollOffset),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: List<Widget>.generate(
-                      lineCount,
-                      (index) => SizedBox(
-                        height: _lineExtent,
-                        child: Padding(
-                          padding: const EdgeInsets.only(right: 13),
-                          child: Text(
-                            '${index + 1}',
-                            textAlign: TextAlign.right,
-                            style: const TextStyle(
-                              color: ScrapnoteTokens.ruleStrong,
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                              height: _lineExtent / 12,
-                              fontFeatures: <FontFeature>[
-                                FontFeature.tabularFigures(),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const _Hairline(axis: Axis.vertical),
-          Expanded(
-            child: TextField(
-              key: const ValueKey<String>('scrap-editor'),
-              controller: widget.controller,
-              scrollController: widget.scrollController,
-              enabled: widget.enabled,
-              autofocus: true,
-              expands: true,
-              minLines: null,
-              maxLines: null,
-              keyboardType: TextInputType.multiline,
-              textAlignVertical: TextAlignVertical.top,
-              style: const TextStyle(
-                color: ScrapnoteTokens.charcoal,
-                fontFamily: 'monospace',
-                fontSize: _fontSize,
-                height: _lineHeight,
-              ),
-              cursorColor: ScrapnoteTokens.signalOrange,
-              cursorWidth: 2,
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                disabledBorder: InputBorder.none,
-                contentPadding: EdgeInsets.fromLTRB(24, 22, 32, 32),
-                filled: true,
-                fillColor: ScrapnoteTokens.paper,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

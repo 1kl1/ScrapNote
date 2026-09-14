@@ -133,13 +133,14 @@ class _DocumentImage extends StatelessWidget {
       image: true,
       label: label?.trim().isEmpty ?? true ? 'Document image' : label,
       child: Align(
-        alignment: switch (alignment) {
+        alignment: switch (alignment?.split(':').first) {
           'left' => Alignment.centerLeft,
           'right' => Alignment.centerRight,
           _ => Alignment.center,
         },
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 420, maxWidth: 720),
+        child: FractionallySizedBox(
+          widthFactor:
+              (int.tryParse(alignment?.split(':').last ?? '') ?? 100) / 100,
           child: ClipRect(child: child),
         ),
       ),

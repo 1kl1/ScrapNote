@@ -143,8 +143,8 @@ void main() {
       final focusedEditor = tester
           .widgetList<EditableText>(find.byType(EditableText))
           .singleWhere((field) => field.focusNode.hasFocus);
-      expect(focusedEditor.controller.text, '\nAfter');
-      expect(focusedEditor.controller.selection.extentOffset, 1);
+      expect(focusedEditor.controller.text, 'After');
+      expect(focusedEditor.controller.selection.extentOffset, 0);
       expect(
         session.activeDocument!.body,
         startsWith('Before\n![clipboard image.png]'),
@@ -232,24 +232,35 @@ void main() {
         'BeforeAfter',
       );
       tester
-          .widget<EditableText>(find.byType(EditableText))
+          .widget<EditableText>(
+            find.descendant(
+              of: find.byKey(const ValueKey('note-editor')),
+              matching: find.byType(EditableText),
+            ),
+          )
           .controller
           .selection = const TextSelection.collapsed(
         offset: 6,
       );
-      await tester.tap(find.text('Insert Scrap'));
-      await tester.pump();
-      await tester.enterText(find.byType(EditableText).first, 'Source');
+      expect(find.text('SCRAPS'), findsOneWidget);
+      await tester.enterText(find.byType(EditableText).last, 'Source');
       await tester.pump();
       await tester.tap(find.text('Source Scrap'));
       await tester.pumpAndSettle();
-      expect(notes.activeDocument!.body, startsWith('Before\nSource Scrap'));
+      expect(
+        notes.activeDocument!.body,
+        startsWith('Before\n<!-- scrapnote:begin:'),
+      );
+      expect(
+        find.byKey(const ValueKey('scrap-object-scrap-0')),
+        findsOneWidget,
+      );
       expect(
         notes.activeDocument!.body,
         contains('](../../assets/shared.png)'),
       );
       expect(notes.activeDocument!.body, endsWith('\nAfter'));
-      expect(find.byType(Image), findsOneWidget);
+      expect(find.byType(Image), findsNothing);
       await tester.runAsync(() async {
         expect(await notes.saveActive(), isTrue);
         final saved = (await NoteRepository(vaultDirectory).listNotes()).single;
@@ -262,6 +273,42 @@ void main() {
         );
       });
       await tester.pumpAndSettle();
+      expect(find.byType(Image), findsOneWidget);
+      expect(find.textContaining('Source detail'), findsOneWidget);
+      await tester.tap(find.text('Edit'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('scrap-object-scrap-0')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byTooltip('Edit Scrap'));
+      await tester.pumpAndSettle();
+      final editField = find.descendant(
+        of: find.byKey(const ValueKey('scrap-dialog-editor')),
+        matching: find.byType(EditableText),
+      );
+      await tester.enterText(editField, 'Revised capture');
+      await tester.tap(find.text('Apply'));
+      await tester.pumpAndSettle();
+      expect(notes.activeDocument!.body, contains('Revised capture'));
+      expect(scraps.scraps.single.body, startsWith('Source Scrap'));
+      expect(notes.usedScrapIds(), {'scrap-0'});
+      await tester.tap(find.byTooltip('Edit Scrap'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('scrap-dialog-editor')),
+        'Cancelled change',
+      );
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(notes.activeDocument!.body, isNot(contains('Cancelled change')));
+      await tester.tap(find.byKey(ScrapnoteShell.scrapsNavigationKey));
+      await tester.pumpAndSettle();
+      expect(find.text('Source Scrap'), findsNothing);
+      notes.newDocument();
+      await tester.tap(find.byKey(ScrapnoteShell.notesNavigationKey));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('scrap-choice-scrap-0')), findsNothing);
     },
   );
 

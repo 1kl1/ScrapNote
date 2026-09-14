@@ -7,6 +7,8 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import '../domain/scrap.dart';
 import '../features/editor/inline_image.dart';
+import '../features/editor/scrap_embed.dart';
+import '../features/notes/folder_name_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
@@ -283,7 +285,11 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
     final active = _editorSession.activeDocument;
     return switch (_section) {
       ScrapnoteSection.scraps => ScrapsView(
-        scraps: _controller.scraps,
+        scraps: _controller.scraps
+            .where(
+              (scrap) => !_noteController.usedScrapIds().contains(scrap.id),
+            )
+            .toList(),
         imageDirectory: path.join(_controller.vaultPath!, 'scraps'),
         onDeleteScrap: (id) => unawaited(_deleteScrap(id)),
         tabs: <ScrapEditorTabData>[
@@ -313,8 +319,18 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
         onRemoveImage: _removeImage,
       ),
       ScrapnoteSection.notes => NotesWorkspace(
-        scraps: _controller.scraps,
+        scraps: _controller.scraps
+            .where(
+              (scrap) => !_noteController
+                  .usedScrapIds(excludingActive: true)
+                  .contains(scrap.id),
+            )
+            .toList(),
         onInsertScrap: _insertScrap,
+        onEmbeddedImageAdded: (imagePath) {
+          _temporaryImagePaths.add(imagePath);
+          _noteController.addAttachment(imagePath);
+        },
         noteController: _noteController,
         textController: _noteTextController,
         onCreateFolder: () => unawaited(_createNoteFolder()),
@@ -388,6 +404,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   }
 
   Future<void> _handleNativeSaveRequested() async {
+    if (ModalRoute.of(context)?.isCurrent == false) return;
     if (!mounted || !_controller.hasVault) return;
     if (_section == ScrapnoteSection.scraps) {
       await _saveActiveDocument();
@@ -397,6 +414,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   }
 
   Future<void> _handleNativeNewDocumentRequested() async {
+    if (ModalRoute.of(context)?.isCurrent == false) return;
     if (!mounted || !_controller.hasVault) return;
     if (_section == ScrapnoteSection.scraps) {
       _newDocument();
@@ -406,6 +424,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   }
 
   Future<void> _handleNativeCloseDocumentRequested() async {
+    if (ModalRoute.of(context)?.isCurrent == false) return;
     await _closeActiveDocument();
   }
 
@@ -423,7 +442,8 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   }
 
   KeyEventResult _handleGlobalKeyEvent(KeyEvent event) {
-    if (event is! KeyDownEvent ||
+    if (ModalRoute.of(context)?.isCurrent == false ||
+        event is! KeyDownEvent ||
         (!HardwareKeyboard.instance.isMetaPressed &&
             !HardwareKeyboard.instance.isControlPressed) ||
         !_controller.hasVault) {
@@ -572,7 +592,12 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   }
 
   void _insertScrap(Scrap scrap) {
-    if (_noteController.saving) return;
+    if (_noteController.saving ||
+        _noteController
+            .usedScrapIds(excludingActive: true)
+            .contains(scrap.id)) {
+      return;
+    }
     if (_noteController.activeDocument == null) _noteController.newDocument();
     final note = _noteController.activeDocument!;
     final sourceDirectory = path.join(_controller.vaultPath!, 'scraps');
@@ -592,7 +617,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
       ).toString();
       return match.group(0)!.replaceFirst(match.group(2)!, relative);
     });
-    InlineImage.insert(_noteTextController, body);
+    InlineImage.insert(_noteTextController, ScrapEmbed.wrap(scrap, body));
   }
 
   void _activateDocument(String sessionId) {
@@ -856,32 +881,11 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   }
 
   Future<void> _createNoteFolder() async {
-    final nameController = TextEditingController();
     final name = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: ScrapnoteTokens.paperRaised,
-        title: const Text('New folder'),
-        content: TextField(
-          controller: nameController,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Folder name'),
-          onSubmitted: (value) => Navigator.of(dialogContext).pop(value),
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () =>
-                Navigator.of(dialogContext).pop(nameController.text),
-            child: const Text('Create'),
-          ),
-        ],
-      ),
+      builder: (_) => const FolderNameDialog(),
     );
-    nameController.dispose();
+    if (!mounted) return;
     if (name != null && name.trim().isNotEmpty) {
       await _noteController.createFolder(name);
     }

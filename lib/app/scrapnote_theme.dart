@@ -42,6 +42,7 @@ abstract final class ScrapnoteTheme {
           const TextStyle(
             color: ScrapnoteTokens.charcoal,
             fontSize: 15,
+            fontFamily: 'monospace',
             height: 1.6,
           ),
           variants: const {},

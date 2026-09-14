@@ -3,11 +3,11 @@ import 'package:flutter/widgets.dart';
 /// Markdown remains the source of truth for the block editor and local files.
 class InlineImage {
   static final pattern = RegExp(
-    r'!\[((?:\\.|[^\]])*)\]\(([^\s)]+)(?: "(left|center|right)")?\)',
+    r'!\[((?:\\.|[^\]])*)\]\(([^\s)]+)(?: "(left|center|right)(?::(100|50|33|20))?")?\)',
   );
 
   static String markdown(String source, {String label = 'Image'}) =>
-      '![${label.replaceAll('[', r'\[').replaceAll(']', r'\]')}](${fileUri(source)})';
+      '![${label.replaceAll('[', r'\[').replaceAll(']', r'\]')}](${fileUri(source)} "center:50")';
 
   static String fileUri(String source) =>
       Uri.file(source).toString().replaceAll('(', '%28').replaceAll(')', '%29');

@@ -5,6 +5,7 @@ import 'package:path/path.dart' as path;
 import 'package:uuid/uuid.dart';
 
 import '../../domain/note.dart';
+import '../editor/scrap_embed.dart';
 import '../../infrastructure/vault/note_repository.dart';
 
 class NoteEditorDocument {
@@ -15,8 +16,14 @@ class NoteEditorDocument {
     required this.body,
     required this.savedBody,
     this.pendingImagePaths = const <String>[],
+    this.preview = false,
+    this.draftTitle = '',
+    this.savedTitle = '',
   });
 
+  final String draftTitle;
+  final String savedTitle;
+  final bool preview;
   final String sessionId;
   final Note? note;
   final String folder;
@@ -24,8 +31,12 @@ class NoteEditorDocument {
   final String savedBody;
   final List<String> pendingImagePaths;
 
-  bool get dirty => body != savedBody || pendingImagePaths.isNotEmpty;
+  bool get dirty =>
+      draftTitle != savedTitle ||
+      body != savedBody ||
+      pendingImagePaths.isNotEmpty;
   String get title {
+    if (draftTitle.trim().isNotEmpty) return draftTitle.trim();
     if (note == null) return 'Untitled';
     final value = note!.copyWith(body: body).firstLineTitle;
     return value.isEmpty ? 'Untitled' : value;
@@ -34,13 +45,20 @@ class NoteEditorDocument {
   NoteEditorDocument copyWith({
     Note? note,
     bool replaceNote = false,
+    bool? preview,
+    String? draftTitle,
+    String? savedTitle,
     String? body,
+    String? folder,
     String? savedBody,
     List<String>? pendingImagePaths,
   }) => NoteEditorDocument(
     sessionId: sessionId,
+    draftTitle: draftTitle ?? this.draftTitle,
+    savedTitle: savedTitle ?? this.savedTitle,
+    preview: preview ?? this.preview,
     note: replaceNote ? note : (note ?? this.note),
-    folder: folder,
+    folder: folder ?? this.folder,
     body: body ?? this.body,
     savedBody: savedBody ?? this.savedBody,
     pendingImagePaths: pendingImagePaths ?? this.pendingImagePaths,
@@ -73,6 +91,23 @@ class NoteController extends ChangeNotifier {
   bool get saving => _saving;
   bool get hasDirtyDocuments => _documents.any((document) => document.dirty);
   String? get errorMessage => _errorMessage;
+  Set<String> usedScrapIds({bool excludingActive = false}) {
+    final openIds = _documents.map((d) => d.note?.id).toSet();
+    return {
+      for (final note in _notes)
+        if (!openIds.contains(note.id)) ...ScrapEmbed.usedIds(note.body),
+      for (final document in _documents)
+        if (!excludingActive || document.sessionId != _activeSessionId)
+          ...ScrapEmbed.usedIds(document.body),
+    };
+  }
+
+  void updateTitle(String title) {
+    final active = activeDocument;
+    if (active == null || active.draftTitle == title) return;
+    _replace(active.copyWith(draftTitle: title, preview: false));
+  }
+
   String? get vaultPath => _repository?.root.path;
 
   Future<void> connect(String vaultPath) async {
@@ -127,6 +162,97 @@ class NoteController extends ChangeNotifier {
     return false;
   }
 
+  Future<bool> moveNote(String id, String folder) => _changeTree(
+    () => _repository!.moveNote(id, folder),
+    movedNote: id,
+    destination: folder,
+  );
+  Future<bool> moveFolder(String folder, String parent) => _changeTree(
+    () => _repository!.moveFolder(folder, parent),
+    movedFolder: folder,
+    destination: path.join(parent, path.basename(folder)),
+  );
+  Future<bool> deleteNote(String id) =>
+      _changeTree(() => _repository!.deleteNote(id), deletedNote: id);
+  Future<bool> deleteFolder(String folder) => _changeTree(
+    () => _repository!.deleteFolder(folder),
+    deletedFolder: folder,
+  );
+
+  bool _inside(String folder, String parent) =>
+      folder == parent || path.isWithin(parent, folder);
+
+  Future<bool> _changeTree(
+    Future<void> Function() operation, {
+    String? movedNote,
+    String? movedFolder,
+    String? destination,
+    String? deletedNote,
+    String? deletedFolder,
+  }) async {
+    if (_repository == null || _saving) return false;
+    _saving = true;
+    _errorMessage = null;
+    notifyListeners();
+    try {
+      await operation();
+      _notes = await _repository!.listNotes();
+      _folders = await _repository!.listFolders();
+      final byId = {for (final note in _notes) note.id: note};
+      final documents = <NoteEditorDocument>[];
+      for (final document in _documents) {
+        if ((deletedNote != null && document.note?.id == deletedNote) ||
+            (deletedFolder != null &&
+                _inside(document.folder, deletedFolder))) {
+          continue;
+        }
+        var folder = document.folder;
+        if (movedNote != null && document.note?.id == movedNote) {
+          folder = destination!;
+        }
+        if (movedFolder != null && _inside(folder, movedFolder)) {
+          final suffix = path.relative(folder, from: movedFolder);
+          folder = suffix == '.'
+              ? destination!
+              : path.join(destination!, suffix);
+        }
+        final from = path.join(vaultPath!, 'notes', document.folder);
+        final to = path.join(vaultPath!, 'notes', folder);
+        documents.add(
+          document.copyWith(
+            folder: folder,
+            note: byId[document.note?.id],
+            body: NoteRepository.rebaseBody(document.body, from, to),
+            savedBody: NoteRepository.rebaseBody(document.savedBody, from, to),
+          ),
+        );
+      }
+      _documents = documents;
+      if (!_documents.any((d) => d.sessionId == _activeSessionId)) {
+        _activeSessionId = _documents.firstOrNull?.sessionId;
+      }
+      if (movedFolder != null && _inside(_selectedFolder, movedFolder)) {
+        final suffix = path.relative(_selectedFolder, from: movedFolder);
+        _selectedFolder = suffix == '.'
+            ? destination!
+            : path.join(destination!, suffix);
+      }
+      if (deletedFolder != null && _inside(_selectedFolder, deletedFolder)) {
+        _selectedFolder = '';
+      }
+      return true;
+    } on FileSystemException catch (error) {
+      _errorMessage = '파일 작업을 완료하지 못했습니다. ${error.message}';
+      return false;
+    } on FormatException catch (error) {
+      _errorMessage = error.message;
+      return false;
+    } finally {
+      _saving = false;
+      notifyListeners();
+    }
+  }
+
   NoteEditorDocument newDocument() {
     final document = NoteEditorDocument(
       sessionId: const Uuid().v4(),
@@ -156,6 +282,9 @@ class NoteController extends ChangeNotifier {
       folder: note.folder,
       body: note.body,
       savedBody: note.body,
+      draftTitle: note.title,
+      savedTitle: note.title,
+      preview: true,
     );
     _documents = <NoteEditorDocument>[..._documents, document];
     _activeSessionId = document.sessionId;
@@ -169,10 +298,15 @@ class NoteController extends ChangeNotifier {
     }
   }
 
+  void editActive() {
+    final active = activeDocument;
+    if (active != null) _replace(active.copyWith(preview: false));
+  }
+
   void updateBody(String body) {
     final active = activeDocument;
     if (active == null || active.body == body) return;
-    _replace(active.copyWith(body: body));
+    _replace(active.copyWith(body: body, preview: false));
   }
 
   void addAttachment(String imagePath) {
@@ -202,7 +336,9 @@ class NoteController extends ChangeNotifier {
     final repository = _repository;
     final active = activeDocument;
     if (repository == null || active == null) return false;
-    if (active.body.trim().isEmpty && active.pendingImagePaths.isEmpty) {
+    if (active.draftTitle.trim().isEmpty &&
+        active.body.trim().isEmpty &&
+        active.pendingImagePaths.isEmpty) {
       _errorMessage = '빈 Note는 저장하지 않았습니다.';
       notifyListeners();
       return false;
@@ -214,11 +350,13 @@ class NoteController extends ChangeNotifier {
           ? await repository.createNote(
               active.body,
               folder: active.folder,
+              title: active.draftTitle,
               attachmentPaths: active.pendingImagePaths,
             )
           : await repository.updateNote(
               active.note!,
               active.body,
+              title: active.draftTitle,
               attachmentPaths: active.pendingImagePaths,
             );
       _notes = <Note>[saved, ..._notes.where((note) => note.id != saved.id)]
@@ -229,6 +367,9 @@ class NoteController extends ChangeNotifier {
           replaceNote: true,
           body: saved.body,
           savedBody: saved.body,
+          draftTitle: saved.title,
+          savedTitle: saved.title,
+          preview: true,
           pendingImagePaths: const <String>[],
         ),
       );

@@ -11,8 +11,12 @@ import 'package:path/path.dart' as path;
 import '../../domain/scrap.dart';
 import '../editor/inline_document_editor.dart';
 import '../editor/inline_image.dart';
+import '../editor/scrap_embed.dart';
+import '../editor/local_markdown_view.dart';
 import 'scrap_picker.dart';
 import 'note_controller.dart';
+import 'note_tree.dart';
+import 'note_title_field.dart';
 
 class NotesWorkspace extends StatelessWidget {
   const NotesWorkspace({
@@ -28,9 +32,11 @@ class NotesWorkspace extends StatelessWidget {
     required this.onRemoveImage,
     this.scraps = const [],
     this.onInsertScrap,
+    this.onEmbeddedImageAdded,
     super.key,
   });
 
+  final ValueChanged<String>? onEmbeddedImageAdded;
   final List<Scrap> scraps;
   final ValueChanged<Scrap>? onInsertScrap;
   final NoteController noteController;
@@ -71,6 +77,7 @@ class NotesWorkspace extends StatelessWidget {
             final editor = _NoteDocumentArea(
               scraps: scraps,
               onInsertScrap: onInsertScrap,
+              onEmbeddedImageAdded: onEmbeddedImageAdded,
               noteController: noteController,
               textController: textController,
               onCreateNote: onCreateNote,
@@ -87,8 +94,8 @@ class NotesWorkspace extends StatelessWidget {
                 SizedBox(
                   key: const ValueKey<String>('notes-hierarchy-pane'),
                   width: ScrapnoteTokens.explorerPaneWidth,
-                  child: _NotesHierarchy(
-                    noteController: noteController,
+                  child: NoteTree(
+                    controller: noteController,
                     onCreateFolder: onCreateFolder,
                     onCreateNote: onCreateNote,
                   ),
@@ -104,125 +111,11 @@ class NotesWorkspace extends StatelessWidget {
   }
 }
 
-class _NotesHierarchy extends StatefulWidget {
-  const _NotesHierarchy({
-    required this.noteController,
-    required this.onCreateFolder,
-    required this.onCreateNote,
-  });
-  final NoteController noteController;
-  final VoidCallback onCreateFolder;
-  final VoidCallback onCreateNote;
-  @override
-  State<_NotesHierarchy> createState() => _NotesHierarchyState();
-}
-
-class _NotesHierarchyState extends State<_NotesHierarchy> {
-  final Set<String> _collapsed = {};
-  NoteController get controller => widget.noteController;
-
-  List<Widget> _children(String parent, int depth) {
-    final folders = controller.folders.where(
-      (folder) =>
-          folder.id.isNotEmpty &&
-          (path.dirname(folder.id) == '.' ? '' : path.dirname(folder.id)) ==
-              parent,
-    );
-    final notes =
-        controller.notes.where((note) => note.folder == parent).toList()..sort(
-          (a, b) => a.firstLineTitle.toLowerCase().compareTo(
-            b.firstLineTitle.toLowerCase(),
-          ),
-        );
-    return [
-      for (final folder in folders) ...[
-        Padding(
-          padding: EdgeInsets.only(left: depth * 16),
-          child: _HierarchyRow(
-            selected: folder.id == controller.selectedFolder,
-            icon: _collapsed.contains(folder.id)
-                ? FLucideIcons.chevronRight
-                : FLucideIcons.chevronDown,
-            title: folder.name,
-            onPressed: () {
-              setState(() {
-                if (!_collapsed.add(folder.id)) _collapsed.remove(folder.id);
-              });
-              controller.selectFolder(folder.id);
-            },
-          ),
-        ),
-        if (!_collapsed.contains(folder.id)) ..._children(folder.id, depth + 1),
-      ],
-      for (final note in notes)
-        Padding(
-          padding: EdgeInsets.only(left: depth * 16),
-          child: _HierarchyRow(
-            selected: note.id == controller.activeDocument?.note?.id,
-            icon: FLucideIcons.fileText,
-            title: note.firstLineTitle.isEmpty
-                ? 'Untitled'
-                : note.firstLineTitle,
-            subtitle: _timestamp(note.updatedAt),
-            onPressed: () {
-              controller.selectFolder(note.folder);
-              controller.openNote(note.id);
-            },
-          ),
-        ),
-    ];
-  }
-
-  @override
-  Widget build(BuildContext context) => ColoredBox(
-    color: ScrapnoteTokens.paperRaised,
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _HierarchyHeader(
-          label: 'NOTES',
-          action: Row(
-            children: [
-              _IconAction(
-                tooltip: 'New folder',
-                icon: FLucideIcons.folderPlus,
-                onPressed: widget.onCreateFolder,
-              ),
-              _IconAction(
-                tooltip: 'New note · ⌘N',
-                icon: FLucideIcons.filePlus2,
-                onPressed: widget.onCreateNote,
-              ),
-            ],
-          ),
-        ),
-        const Divider(height: 1, color: ScrapnoteTokens.rule),
-        Expanded(
-          child: controller.loading
-              ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-              : ListView(
-                  children: [
-                    _HierarchyRow(
-                      selected: controller.selectedFolder.isEmpty,
-                      icon: FLucideIcons.folderOpen,
-                      title: 'Notes',
-                      onPressed: () => controller.selectFolder(''),
-                    ),
-                    ..._children('', 1),
-                    if (controller.notes.isEmpty)
-                      _EmptyNotes(onCreate: widget.onCreateNote),
-                  ],
-                ),
-        ),
-      ],
-    ),
-  );
-}
-
 class _NoteDocumentArea extends StatefulWidget {
   const _NoteDocumentArea({
     required this.scraps,
     required this.onInsertScrap,
+    required this.onEmbeddedImageAdded,
     required this.noteController,
     required this.textController,
     required this.onCreateNote,
@@ -233,6 +126,7 @@ class _NoteDocumentArea extends StatefulWidget {
     required this.onRemoveImage,
   });
 
+  final ValueChanged<String>? onEmbeddedImageAdded;
   final List<Scrap> scraps;
   final ValueChanged<Scrap>? onInsertScrap;
   final NoteController noteController;
@@ -249,7 +143,6 @@ class _NoteDocumentArea extends StatefulWidget {
 }
 
 class _NoteDocumentAreaState extends State<_NoteDocumentArea> {
-  bool _showScraps = false;
   NoteController get noteController => widget.noteController;
   TextEditingController get textController => widget.textController;
   VoidCallback get onCreateNote => widget.onCreateNote;
@@ -289,12 +182,13 @@ class _NoteDocumentAreaState extends State<_NoteDocumentArea> {
                     ],
                   ),
                 ),
-                FButton(
-                  variant: FButtonVariant.ghost,
-                  prefix: const Icon(FLucideIcons.notebookTabs, size: 16),
-                  onPress: () => setState(() => _showScraps = !_showScraps),
-                  child: const Text('Insert Scrap'),
-                ),
+                if (active?.preview == true)
+                  FButton(
+                    variant: FButtonVariant.ghost,
+                    onPress: noteController.editActive,
+                    prefix: const Icon(FLucideIcons.pencil, size: 14),
+                    child: const Text('Edit'),
+                  ),
                 _IconAction(
                   tooltip: 'New note · ⌘N',
                   icon: FLucideIcons.plus,
@@ -305,43 +199,93 @@ class _NoteDocumentAreaState extends State<_NoteDocumentArea> {
           ),
         ),
         const Divider(height: 1, color: ScrapnoteTokens.rule),
-        if (_showScraps)
-          SizedBox(
-            height: 220,
-            child: ScrapPicker(
-              scraps: widget.scraps,
-              onInsert: (scrap) {
-                widget.onInsertScrap?.call(scrap);
-                setState(() => _showScraps = false);
-              },
-            ),
-          ),
-        Expanded(
-          child: active == null
-              ? _NoOpenNote(onCreate: onCreateNote)
-              : DropTarget(
-                  enable: !noteController.saving,
-                  onDragDone: (detail) {
-                    InlineImage.placeCaret(context, detail.globalPosition);
-                    onImagesDropped(
-                      detail.files.map((file) => file.path).toList(),
-                    );
-                  },
-                  child: InlineDocumentEditor(
-                    key: ValueKey(active.sessionId),
-                    editorKey: const ValueKey<String>('note-editor'),
-                    controller: textController,
-                    enabled: !noteController.saving,
-                    imageDirectory: active.note == null
-                        ? path.join(
-                            noteController.vaultPath ?? '',
-                            'notes',
-                            active.folder,
-                          )
-                        : path.dirname(active.note!.filePath),
-                    onRemoveImage: onRemoveImage,
+        if (active != null)
+          active.preview
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(32, 24, 32, 0),
+                  child: Text(
+                    active.title,
+                    style: Theme.of(context).textTheme.headlineSmall,
                   ),
+                )
+              : NoteTitleField(
+                  key: ValueKey('title-${active.sessionId}'),
+                  title: active.draftTitle,
+                  enabled: !noteController.saving,
+                  onChanged: noteController.updateTitle,
                 ),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final directory = active?.note == null
+                  ? path.join(
+                      noteController.vaultPath ?? '',
+                      'notes',
+                      active?.folder ?? '',
+                    )
+                  : path.dirname(active!.note!.filePath);
+              final editor = active == null
+                  ? _NoOpenNote(onCreate: onCreateNote)
+                  : active.preview
+                  ? SingleChildScrollView(
+                      padding: const EdgeInsets.all(32),
+                      child: LocalMarkdownView(
+                        data: active.body,
+                        imageDirectory: directory,
+                      ),
+                    )
+                  : DropTarget(
+                      enable: !noteController.saving,
+                      onDragDone: (detail) {
+                        InlineImage.placeCaret(context, detail.globalPosition);
+                        onImagesDropped(
+                          detail.files.map((file) => file.path).toList(),
+                        );
+                      },
+                      child: InlineDocumentEditor(
+                        key: ValueKey(active.sessionId),
+                        editorKey: const ValueKey<String>('note-editor'),
+                        controller: textController,
+                        enabled: !noteController.saving,
+                        imageDirectory: directory,
+                        onRemoveImage: onRemoveImage,
+                        onAddImage: widget.onEmbeddedImageAdded,
+                      ),
+                    );
+              final picker = ScrapPicker(
+                scraps: widget.scraps,
+                usedIds: ScrapEmbed.usedIds(active?.body ?? ''),
+                imageDirectory: path.join(
+                  noteController.vaultPath ?? '',
+                  'scraps',
+                ),
+                onInsert: (scrap) {
+                  noteController.editActive();
+                  widget.onInsertScrap?.call(scrap);
+                },
+              );
+              if (constraints.maxWidth < 470) {
+                return Column(
+                  children: [
+                    Expanded(child: editor),
+                    const Divider(height: 1),
+                    SizedBox(height: 190, child: picker),
+                  ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: editor),
+                  const VerticalDivider(width: 1),
+                  SizedBox(
+                    width: constraints.maxWidth < 700 ? 190 : 250,
+                    child: picker,
+                  ),
+                ],
+              );
+            },
+          ),
         ),
         if (noteController.saving)
           const LinearProgressIndicator(
@@ -433,119 +377,6 @@ class _NoteTab extends StatelessWidget {
   }
 }
 
-class _HierarchyHeader extends StatelessWidget {
-  const _HierarchyHeader({required this.label, required this.action});
-  final String label;
-  final Widget action;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    height: ScrapnoteTokens.tabStripHeight,
-    child: Row(
-      children: <Widget>[
-        const SizedBox(width: ScrapnoteTokens.space4),
-        Expanded(
-          child: Text(
-            label,
-            style: const TextStyle(
-              color: ScrapnoteTokens.charcoal,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.8,
-            ),
-          ),
-        ),
-        action,
-      ],
-    ),
-  );
-}
-
-class _HierarchyRow extends StatelessWidget {
-  const _HierarchyRow({
-    required this.selected,
-    required this.icon,
-    required this.title,
-    required this.onPressed,
-    this.subtitle,
-  });
-  final bool selected;
-  final IconData icon;
-  final String title;
-  final String? subtitle;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) => Material(
-    color: selected ? ScrapnoteTokens.paperSunken : Colors.transparent,
-    child: InkWell(
-      onTap: onPressed,
-      child: Container(
-        constraints: const BoxConstraints(
-          minHeight: ScrapnoteTokens.minimumHitTarget,
-        ),
-        padding: const EdgeInsets.symmetric(
-          horizontal: ScrapnoteTokens.space4,
-          vertical: ScrapnoteTokens.space2,
-        ),
-        decoration: BoxDecoration(
-          border: Border(
-            left: BorderSide(
-              color: selected
-                  ? ScrapnoteTokens.signalOrange
-                  : Colors.transparent,
-              width: 2,
-            ),
-          ),
-        ),
-        child: Row(
-          children: <Widget>[
-            Icon(icon, size: 14, color: ScrapnoteTokens.mutedInk),
-            const SizedBox(width: ScrapnoteTokens.space2),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  if (subtitle != null)
-                    Text(
-                      subtitle!,
-                      style: const TextStyle(
-                        color: ScrapnoteTokens.mutedInk,
-                        fontFamily: 'monospace',
-                        fontSize: 10,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class _EmptyNotes extends StatelessWidget {
-  const _EmptyNotes({required this.onCreate});
-  final VoidCallback onCreate;
-
-  @override
-  Widget build(BuildContext context) => Align(
-    alignment: Alignment.topLeft,
-    child: TextButton.icon(
-      onPressed: onCreate,
-      icon: const Icon(FLucideIcons.filePlus2, size: 14),
-      label: const Text('New note'),
-    ),
-  );
-}
-
 class _NoOpenNote extends StatelessWidget {
   const _NoOpenNote({required this.onCreate});
   final VoidCallback onCreate;
@@ -581,11 +412,4 @@ class _IconAction extends StatelessWidget {
       color: ScrapnoteTokens.charcoalSoft,
     ),
   );
-}
-
-String _timestamp(DateTime value) {
-  final local = value.toLocal();
-  String two(int number) => number.toString().padLeft(2, '0');
-  return '${local.year}-${two(local.month)}-${two(local.day)} '
-      '${two(local.hour)}:${two(local.minute)}';
 }

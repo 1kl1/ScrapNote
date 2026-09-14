@@ -63,7 +63,8 @@ void main() {
     await tester.tap(find.text('Trips'));
     await tester.pumpAndSettle();
     expect(find.text('Seoul'), findsOneWidget);
-    expect(find.text('Insert Scrap'), findsOneWidget);
+    expect(find.text('SCRAPS'), findsOneWidget);
+    expect(find.text('Notes'), findsNothing);
     expect(find.byTooltip('Attach image · ⇧⌘I'), findsNothing);
   });
 
@@ -104,8 +105,16 @@ void main() {
     );
 
     await tester.tap(find.text('New note').first);
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey<String>('note-editor')), findsOneWidget);
     expect(find.text('Untitled'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('note-title')),
+      'My title',
+    );
+    await tester.pumpAndSettle();
+    expect(controller.activeDocument!.draftTitle, 'My title');
+    expect(controller.activeDocument!.dirty, isTrue);
+    expect(find.text('My title'), findsNWidgets(2));
   });
 }

@@ -205,22 +205,7 @@ class MainFlutterWindow: NSWindow, NSWindowDelegate {
   }
 
   private func readClipboardImage(result: @escaping FlutterResult) {
-    let pasteboard = NSPasteboard.general
-    let pngData: Data?
-
-    if let directPNG = pasteboard.data(forType: .png),
-       !directPNG.isEmpty,
-       NSImage(data: directPNG) != nil
-    {
-      pngData = directPNG
-    } else if let image = NSImage(pasteboard: pasteboard),
-              let tiffData = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData)
-    {
-      pngData = bitmap.representation(using: .png, properties: [:])
-    } else {
-      pngData = nil
-    }
+    let pngData = ClipboardImageReader.pngData(from: .general)
 
     guard let pngData else {
       result(nil)

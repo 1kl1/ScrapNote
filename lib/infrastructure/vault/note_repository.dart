@@ -105,6 +105,7 @@ class NoteRepository {
   Future<Note> createNote(
     String body, {
     required String folder,
+    String title = '',
     Iterable<String> attachmentPaths = const <String>[],
   }) async {
     await initialize();
@@ -121,6 +122,7 @@ class NoteRepository {
     );
     final note = Note(
       id: id,
+      title: title.trim(),
       body: await _resolveAssetLinks(body, attachmentPaths, directory),
       folder: folder,
       createdAt: now,
@@ -135,6 +137,7 @@ class NoteRepository {
   Future<Note> updateNote(
     Note existing,
     String body, {
+    String? title,
     Iterable<String> attachmentPaths = const <String>[],
   }) async {
     final file = File(existing.filePath);
@@ -158,6 +161,7 @@ class NoteRepository {
         .toList(growable: false);
     final note = Note(
       id: persisted.id,
+      title: title?.trim() ?? persisted.title,
       body: await _resolveAssetLinks(body, attachmentPaths, file.parent),
       folder: persisted.folder,
       createdAt: persisted.createdAt,
@@ -170,6 +174,155 @@ class NoteRepository {
     );
     await _atomicWrite(file, codec.encode(note));
     return note;
+  }
+
+  static String rebaseBody(String body, String from, String to) =>
+      body.replaceAllMapped(InlineImage.pattern, (match) {
+        final uri = Uri.parse(match.group(2)!);
+        if (uri.hasScheme || uri.path.startsWith('/')) return match.group(0)!;
+        final absolute = Uri.directory(from).resolveUri(uri).toFilePath();
+        final relative = InlineImage.encodePath(
+          path.relative(absolute, from: to).replaceAll(r'\', '/'),
+        );
+        return match.group(0)!.replaceFirst(match.group(2)!, relative);
+      });
+
+  Note _relocate(Note note, String target) => note.copyWith(
+    filePath: target,
+    folder:
+        path.relative(path.dirname(target), from: notesDirectory.path) == '.'
+        ? ''
+        : path.relative(path.dirname(target), from: notesDirectory.path),
+    body: rebaseBody(
+      note.body,
+      path.dirname(note.filePath),
+      path.dirname(target),
+    ),
+    assets: [
+      for (final asset in note.assets)
+        ScrapAsset(
+          hash: asset.hash,
+          relativePath: path
+              .relative(
+                path.normalize(
+                  path.join(path.dirname(note.filePath), asset.relativePath),
+                ),
+                from: path.dirname(target),
+              )
+              .replaceAll(r'\', '/'),
+          originalName: asset.originalName,
+          mimeType: asset.mimeType,
+        ),
+    ],
+  );
+
+  Future<void> moveNote(String id, String targetFolder) async {
+    final note = (await listNotes()).where((n) => n.id == id).firstOrNull;
+    if (note == null) {
+      throw const FileSystemException('The Note no longer exists.');
+    }
+    final directory = _folderDirectory(targetFolder);
+    if (!await directory.exists()) {
+      throw const FileSystemException('Destination folder does not exist.');
+    }
+    final target = path.join(directory.path, path.basename(note.filePath));
+    if (target == note.filePath) return;
+    if (await File(target).exists()) {
+      throw const FileSystemException(
+        'A document already exists at the destination.',
+      );
+    }
+    await _atomicWrite(File(target), codec.encode(_relocate(note, target)));
+    try {
+      await File(note.filePath).delete();
+    } catch (_) {
+      await File(target).delete();
+      rethrow;
+    }
+  }
+
+  Future<void> moveFolder(String folder, String parent) async {
+    if (folder.isEmpty) {
+      throw const FormatException('Cannot move the Notes root.');
+    }
+    final source = _folderDirectory(folder);
+    final destinationParent = _folderDirectory(parent);
+    final target = path.join(
+      destinationParent.path,
+      path.basename(source.path),
+    );
+    if (source.path == target) return;
+    if (source.path == destinationParent.path ||
+        path.isWithin(source.path, destinationParent.path)) {
+      throw const FormatException(
+        'A folder cannot be moved into itself or a child folder.',
+      );
+    }
+    if (await Directory(target).exists()) {
+      throw const FileSystemException(
+        'A folder with this name already exists.',
+      );
+    }
+    final notes = (await listNotes())
+        .where((n) => path.isWithin(source.path, n.filePath))
+        .toList();
+    final originals = {
+      for (final note in notes)
+        note.filePath: await File(note.filePath).readAsString(),
+    };
+    await source.rename(target);
+    try {
+      for (final note in notes) {
+        final movedPath = path.join(
+          target,
+          path.relative(note.filePath, from: source.path),
+        );
+        await _atomicWrite(
+          File(movedPath),
+          codec.encode(_relocate(note, movedPath)),
+        );
+      }
+    } catch (_) {
+      for (final entry in originals.entries) {
+        final movedPath = path.join(
+          target,
+          path.relative(entry.key, from: source.path),
+        );
+        await _atomicWrite(File(movedPath), entry.value);
+      }
+      await Directory(target).rename(source.path);
+      rethrow;
+    }
+  }
+
+  Future<void> deleteNote(String id) async {
+    final note = (await listNotes()).where((n) => n.id == id).firstOrNull;
+    if (note == null) return;
+    final trash = Directory(path.join(root.path, '.trash', 'notes'));
+    await trash.create(recursive: true);
+    await File(note.filePath).rename(
+      path.join(
+        trash.path,
+        '${DateTime.now().microsecondsSinceEpoch}-${path.basename(note.filePath)}',
+      ),
+    );
+  }
+
+  Future<void> deleteFolder(String folder) async {
+    if (folder.isEmpty) {
+      throw const FormatException('Cannot delete the Notes root.');
+    }
+    final directory = _folderDirectory(folder);
+    final trash = Directory(path.join(root.path, '.trash', 'notes'));
+    await trash.create(recursive: true);
+    if (await directory.exists()) {
+      await directory.rename(
+        path.join(
+          trash.path,
+          '${DateTime.now().microsecondsSinceEpoch}-${path.basename(directory.path)}',
+        ),
+      );
+    }
   }
 
   Directory _folderDirectory(String folder) {

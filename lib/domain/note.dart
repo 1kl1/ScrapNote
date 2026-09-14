@@ -9,8 +9,12 @@ class Note {
     required this.createdAt,
     required this.updatedAt,
     required this.filePath,
+    this.title = '',
     this.assets = const <ScrapAsset>[],
   });
+
+  final String title;
+  String get displayTitle => title.trim().isEmpty ? firstLineTitle : title;
 
   final String id;
   final String body;
@@ -23,6 +27,7 @@ class Note {
   String get firstLineTitle {
     for (final line in body.split(RegExp(r'\r?\n'))) {
       final value = line.trim();
+      if (value.startsWith('<!-- scrapnote:')) continue;
       if (value.isNotEmpty) {
         return value.replaceFirst(RegExp(r'^#{1,6}\s+'), '').trim();
       }
@@ -31,6 +36,7 @@ class Note {
   }
 
   Note copyWith({
+    String? title,
     String? body,
     String? folder,
     DateTime? updatedAt,
@@ -39,6 +45,7 @@ class Note {
   }) {
     return Note(
       id: id,
+      title: title ?? this.title,
       body: body ?? this.body,
       folder: folder ?? this.folder,
       createdAt: createdAt,
