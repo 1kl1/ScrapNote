@@ -1,0 +1,24 @@
+{
+  "date": "2026-09-12",
+  "framework": "Flutter 3.44.9 / Dart 3.12.2",
+  "ui_library": "Forui 0.25.0",
+  "font_stack": "platform-native UI with monospace editor surface",
+  "palette": "existing warm paper and restrained signal orange",
+  "motion": "quick state transitions only",
+  "spacing": "existing 4-point semantic token scale",
+  "preserve": [
+    "Forui 0.25 compatibility",
+    "local-first Markdown storage",
+    "image paste, picker, and drag-and-drop"
+  ],
+  "introduce": [
+    "Index-First editor shell",
+    "N4-derived 48px icon activity rail",
+    "full-height hierarchy explorers",
+    "recent document tabs and dirty state",
+    "native save and close-guard behavior",
+    "local Markdown image rendering",
+    "persistent Note editor",
+    "Scrap metadata and location drawer"
+  ]
+}

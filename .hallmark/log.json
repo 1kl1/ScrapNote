@@ -1,0 +1,34 @@
+[
+  {
+    "date": "2026-09-12",
+    "scope": "app",
+    "macrostructure": "Index-First editor shell",
+    "navigation": "N4-derived 48px icon activity rail",
+    "theme": "custom",
+    "theme_axes": "light / system-native / warm",
+    "vibe": "austere Braun instrument, editor-first",
+    "enrichment": "functional local imagery and geographic context",
+    "brief": "document shortcuts, image rendering, Note persistence, and Scrap metadata"
+  },
+  {
+    "date": "2026-09-09",
+    "scope": "app",
+    "macrostructure": "Index-First editor shell",
+    "navigation": "N4-derived 48px icon activity rail",
+    "theme": "custom",
+    "theme_axes": "light / system-native / warm",
+    "vibe": "austere Braun instrument, editor-first",
+    "enrichment": "none; user content remains primary",
+    "brief": "Scrapnote minimal desktop editor redesign"
+  },
+  {
+    "date": "2026-09-04",
+    "macrostructure": "Workbench",
+    "navigation": "N3 side rail",
+    "theme": "custom",
+    "theme_axes": "light / system-native / warm",
+    "vibe": "warm analog instrument, precise, quiet",
+    "enrichment": "none; user content remains primary",
+    "brief": "Scrapnote desktop shell and first local-first Scrap slice"
+  }
+]
