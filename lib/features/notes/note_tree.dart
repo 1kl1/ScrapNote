@@ -16,8 +16,10 @@ class NoteTree extends StatefulWidget {
     required this.controller,
     required this.onCreateFolder,
     required this.onCreateNote,
+    this.onOpenNote,
     super.key,
   });
+  final VoidCallback? onOpenNote;
   final NoteController controller;
   final VoidCallback onCreateFolder;
   final VoidCallback onCreateNote;
@@ -139,6 +141,7 @@ class _NoteTreeState extends State<NoteTree> {
             onPress: () {
               controller.selectFolder(note.folder);
               controller.openNote(note.id);
+              widget.onOpenNote?.call();
             },
           ),
         ),

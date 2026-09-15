@@ -134,6 +134,70 @@ class NoteController extends ChangeNotifier {
     }
   }
 
+  List<Map<String, Object?>> recoveryDocuments() => [
+    for (final document in _documents.where((d) => d.dirty))
+      {
+        'sessionId': document.sessionId,
+        'noteId': document.note?.id,
+        'folder': document.folder,
+        'body': document.body,
+        'savedBody': document.savedBody,
+        'draftTitle': document.draftTitle,
+        'savedTitle': document.savedTitle,
+        'pendingImagePaths': document.pendingImagePaths,
+      },
+  ];
+
+  void restoreRecovery(List<Map<String, dynamic>> rows) {
+    if (_documents.isNotEmpty) return;
+    _documents = [
+      for (final row in rows)
+        NoteEditorDocument(
+          sessionId: row['sessionId'] as String,
+          note: _notes.where((n) => n.id == row['noteId']).firstOrNull,
+          folder: row['folder'] as String,
+          body: row['body'] as String,
+          savedBody: row['savedBody'] as String,
+          draftTitle: row['draftTitle'] as String,
+          savedTitle: row['savedTitle'] as String,
+          pendingImagePaths: List<String>.from(
+            row['pendingImagePaths'] as List,
+          ),
+        ),
+    ];
+    _activeSessionId = _documents.lastOrNull?.sessionId;
+    notifyListeners();
+  }
+
+  Future<void> reloadAfterSync() async {
+    final repository = _repository;
+    if (repository == null) return;
+    final notes = await repository.listNotes();
+    final folders = await repository.listFolders();
+    final byId = {for (final note in notes) note.id: note};
+    _notes = notes;
+    _folders = folders;
+    _documents = [
+      for (final document in _documents)
+        if (document.dirty || document.note == null)
+          document
+        else if (byId[document.note!.id] case final saved?)
+          document.copyWith(
+            note: saved,
+            folder: saved.folder,
+            body: saved.body,
+            savedBody: saved.body,
+            draftTitle: saved.title,
+            savedTitle: saved.title,
+          ),
+    ];
+    if (activeDocument == null) {
+      _activeSessionId = _documents.lastOrNull?.sessionId;
+    }
+    if (!_folders.any((f) => f.id == _selectedFolder)) _selectedFolder = '';
+    notifyListeners();
+  }
+
   void selectFolder(String folder) {
     if (_selectedFolder == folder) return;
     _selectedFolder = folder;

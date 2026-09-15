@@ -57,6 +57,7 @@ class TimelineView extends StatelessWidget {
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final list = _ChronologicalList(
+                    key: ValueKey(localSelectedDate),
                     scraps: scrapsForDay,
                     imageDirectory: path.join(vaultPath, 'scraps'),
                   );
@@ -105,8 +106,9 @@ class TimelineView extends StatelessWidget {
   }
 }
 
-class _ChronologicalList extends StatelessWidget {
+class _ChronologicalList extends StatefulWidget {
   const _ChronologicalList({
+    super.key,
     required this.scraps,
     required this.imageDirectory,
   });
@@ -115,7 +117,20 @@ class _ChronologicalList extends StatelessWidget {
   final String imageDirectory;
 
   @override
+  State<_ChronologicalList> createState() => _ChronologicalListState();
+}
+
+class _ChronologicalListState extends State<_ChronologicalList> {
+  final _scrollController = ScrollController();
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final scraps = widget.scraps;
     if (scraps.isEmpty) {
       return const Center(
         child: Text(
@@ -125,20 +140,39 @@ class _ChronologicalList extends StatelessWidget {
       );
     }
 
-    return Scrollbar(
-      child: ListView.separated(
+    return ScrollConfiguration(
+      behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+      child: SingleChildScrollView(
+        key: const ValueKey('timeline-scrap-list'),
+        controller: _scrollController,
+        primary: false,
         padding: const EdgeInsets.symmetric(vertical: ScrapnoteTokens.space4),
-        itemCount: scraps.length,
-        separatorBuilder: (context, index) => const _ListRule(),
-        itemBuilder: (context, index) =>
-            _ScrapRow(scrap: scraps[index], imageDirectory: imageDirectory),
+        // Lay out the day's records together. A lazy list estimates its total
+        // extent from visible rows; variable Markdown/image heights made that
+        // estimate and its scrollbar thumb jump while reading.
+        child: Column(
+          children: [
+            for (var index = 0; index < scraps.length; index++) ...[
+              if (index > 0) const _ListRule(),
+              _ScrapRow(
+                key: ValueKey(scraps[index].id),
+                scrap: scraps[index],
+                imageDirectory: widget.imageDirectory,
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
 }
 
 class _ScrapRow extends StatelessWidget {
-  const _ScrapRow({required this.scrap, required this.imageDirectory});
+  const _ScrapRow({
+    super.key,
+    required this.scrap,
+    required this.imageDirectory,
+  });
 
   final Scrap scrap;
   final String imageDirectory;

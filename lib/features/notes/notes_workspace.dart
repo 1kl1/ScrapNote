@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
 
 import '../../core/design/scrapnote_tokens.dart';
+import '../../core/layout/adaptive_workspace.dart';
 import 'package:path/path.dart' as path;
 import '../../domain/scrap.dart';
 import '../editor/inline_document_editor.dart';
@@ -46,7 +47,7 @@ class NotesWorkspace extends StatelessWidget {
   final VoidCallback onSave;
   final ValueChanged<String> onCloseTab;
   final VoidCallback onChooseImages;
-  final VoidCallback onPasteImage;
+  final Future<bool> Function() onPasteImage;
   final ValueChanged<List<String>> onImagesDropped;
   final ValueChanged<String> onRemoveImage;
 
@@ -63,15 +64,6 @@ class NotesWorkspace extends StatelessWidget {
       },
       child: Focus(
         autofocus: true,
-        onKeyEvent: (_, event) {
-          if (event is KeyDownEvent &&
-              (HardwareKeyboard.instance.isMetaPressed ||
-                  HardwareKeyboard.instance.isControlPressed) &&
-              event.logicalKey == LogicalKeyboardKey.keyV) {
-            onPasteImage();
-          }
-          return KeyEventResult.ignored;
-        },
         child: LayoutBuilder(
           builder: (context, constraints) {
             final editor = _NoteDocumentArea(
@@ -86,23 +78,25 @@ class NotesWorkspace extends StatelessWidget {
               onChooseImages: onChooseImages,
               onImagesDropped: onImagesDropped,
               onRemoveImage: onRemoveImage,
+              onPasteImage: onPasteImage,
             );
-            if (constraints.maxWidth < 700) return editor;
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                SizedBox(
-                  key: const ValueKey<String>('notes-hierarchy-pane'),
-                  width: ScrapnoteTokens.explorerPaneWidth,
-                  child: NoteTree(
-                    controller: noteController,
-                    onCreateFolder: onCreateFolder,
-                    onCreateNote: onCreateNote,
-                  ),
-                ),
-                const VerticalDivider(width: 1, color: ScrapnoteTokens.rule),
-                Expanded(child: editor),
-              ],
+            return AdaptiveWorkspace(
+              selection: noteController.activeSessionId,
+              saving: noteController.saving,
+              onSave: onSave,
+              onCreate: onCreateNote,
+              onChooseImages: onChooseImages,
+              listBuilder: (showEditor) => NoteTree(
+                key: const ValueKey<String>('notes-hierarchy-pane'),
+                controller: noteController,
+                onCreateFolder: onCreateFolder,
+                onCreateNote: () {
+                  onCreateNote();
+                  showEditor();
+                },
+                onOpenNote: showEditor,
+              ),
+              editor: editor,
             );
           },
         ),
@@ -124,6 +118,7 @@ class _NoteDocumentArea extends StatefulWidget {
     required this.onChooseImages,
     required this.onImagesDropped,
     required this.onRemoveImage,
+    required this.onPasteImage,
   });
 
   final ValueChanged<String>? onEmbeddedImageAdded;
@@ -137,12 +132,14 @@ class _NoteDocumentArea extends StatefulWidget {
   final VoidCallback onChooseImages;
   final ValueChanged<List<String>> onImagesDropped;
   final ValueChanged<String> onRemoveImage;
+  final Future<bool> Function() onPasteImage;
 
   @override
   State<_NoteDocumentArea> createState() => _NoteDocumentAreaState();
 }
 
 class _NoteDocumentAreaState extends State<_NoteDocumentArea> {
+  bool _showPicker = false;
   NoteController get noteController => widget.noteController;
   TextEditingController get textController => widget.textController;
   VoidCallback get onCreateNote => widget.onCreateNote;
@@ -181,6 +178,11 @@ class _NoteDocumentAreaState extends State<_NoteDocumentArea> {
                         ),
                     ],
                   ),
+                ),
+                _IconAction(
+                  tooltip: '스크랩 삽입',
+                  icon: FLucideIcons.inbox,
+                  onPressed: () => setState(() => _showPicker = !_showPicker),
                 ),
                 if (active?.preview == true)
                   FButton(
@@ -250,6 +252,7 @@ class _NoteDocumentAreaState extends State<_NoteDocumentArea> {
                         imageDirectory: directory,
                         onRemoveImage: onRemoveImage,
                         onAddImage: widget.onEmbeddedImageAdded,
+                        onPasteImage: widget.onPasteImage,
                       ),
                     );
               final picker = ScrapPicker(
@@ -262,16 +265,11 @@ class _NoteDocumentAreaState extends State<_NoteDocumentArea> {
                 onInsert: (scrap) {
                   noteController.editActive();
                   widget.onInsertScrap?.call(scrap);
+                  setState(() => _showPicker = false);
                 },
               );
               if (constraints.maxWidth < 470) {
-                return Column(
-                  children: [
-                    Expanded(child: editor),
-                    const Divider(height: 1),
-                    SizedBox(height: 190, child: picker),
-                  ],
-                );
+                return _showPicker ? picker : editor;
               }
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,

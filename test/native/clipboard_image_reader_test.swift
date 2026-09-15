@@ -21,17 +21,29 @@ struct ClipboardImageReaderTest {
     board.clearContents()
     board.writeObjects([file as NSURL])
     board.setData(icon, forType: .png)
-    assert(ClipboardImageReader.pngData(from: board) == original, "Finder original must win over icon")
+    assert(NSBitmapImageRep(data: ClipboardImageReader.pngData(from: board)!)!.pixelsWide == 13, "Finder original must win over icon")
     assert(FileManager.default.fileExists(atPath: file.path))
     board.clearContents()
     board.setData(original, forType: .png)
-    assert(ClipboardImageReader.pngData(from: board) == original, "Screenshot PNG must still work")
+    assert(NSBitmapImageRep(data: ClipboardImageReader.pngData(from: board)!)!.pixelsWide == 13, "Screenshot PNG must still work")
     let text = directory.appendingPathComponent("document.txt")
     try Data("text".utf8).write(to: text)
     board.clearContents()
     board.writeObjects([text as NSURL])
     board.setData(icon, forType: .png)
     assert(ClipboardImageReader.pngData(from: board) == nil, "Non-image file must not paste its icon")
+
+    let gray16 = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 17, pixelsHigh: 9,
+      bitsPerSample: 16, samplesPerPixel: 1, hasAlpha: false, isPlanar: false,
+      colorSpaceName: .deviceWhite, bytesPerRow: 0, bitsPerPixel: 0)!
+    board.clearContents()
+    board.setData(gray16.tiffRepresentation!, forType: .tiff)
+    let normalized = NSBitmapImageRep(data: ClipboardImageReader.pngData(from: board)!)!
+    assert(normalized.pixelsWide == 17 && normalized.pixelsHigh == 9)
+    assert(normalized.bitsPerSample == 8 && normalized.samplesPerPixel == 4)
+    board.clearContents()
+    board.setData(Data("not an image".utf8), forType: .png)
+    assert(ClipboardImageReader.pngData(from: board) == nil)
     print("Clipboard image tests passed")
   }
 }

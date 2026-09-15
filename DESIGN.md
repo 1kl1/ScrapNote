@@ -2,7 +2,7 @@
 
 ## Product posture
 
-Scrapnote is a local-first desktop writing tool. Its interface should feel like
+Scrapnote is a local-first writing tool for desktop, Android, and foldable screens. Its interface should feel like
 a well-made Braun instrument and behave like a quiet code editor: immediate,
 legible, and free of promotional chrome. User content is the dominant visual
 material.
@@ -23,9 +23,20 @@ The application uses an **Index-First editor shell**.
 5. Without a selected vault, feature content is replaced by one centered,
    sequential setup prompt. The activity rail remains available.
 
-At widths below 760 px, the hierarchy pane collapses before the editor. The
-desktop layout is the primary target, but no control may overflow or become
-unreachable at the macOS minimum window size.
+Below 600 logical pixels the shell uses labelled bottom navigation and a compact
+header. Below 700 pixels of available workspace width, the hierarchy and editor
+share a single surface with a 48 px list/edit toggle; both stay mounted.
+At larger widths the hierarchy and editor are visible together. Android uses
+48 px touch actions for new, image attachment, and save at every width.
+
+Screen cutouts, system bars, and keyboard insets are respected. A separating
+hinge or half-open fold uses the unobstructed top/leading sub-screen. Flat unfolded
+screens use the full available width. Rotation and folding retain draft text and
+selected documents. Android Back returns from the editor to its list first.
+
+Mobile Expenses use a vertical ledger with an explicit add action and a scrollable
+form. The full spreadsheet-style ledger remains on wider screens. The Scrap picker
+in narrow Note editors opens on demand, preserving space for the software keyboard.
 
 ## Geometry
 
@@ -72,8 +83,9 @@ dates, and file-like labels use the platform monospace. Body text is at least
 - A new document is named `Untitled` until its first save.
 - Dirty documents display a dot in the tab. Clean documents display a close
   control on hover/focus; both remain accessible to keyboard and semantics.
-- `Cmd/Ctrl+S` saves the active document. There is no autosave into the vault
-  and no visible Save button.
+- `Cmd/Ctrl+S` saves the active document. Touch and compact layouts expose a Save
+  action. There is no automatic save into the vault. The sync account page can
+  explicitly save all drafts before synchronizing.
 - `Cmd/Ctrl+W` closes the active Scrap or Note tab. Dirty documents use the
   same save/discard/cancel guard as clicking the tab close control.
 - Dirty tabs and dirty window-close requests ask `Save`, `Don’t Save`, or
@@ -124,3 +136,22 @@ and use each Scrap's modified timestamp. The former Location Trail panel is
 removed. The dial is clipped inside the feature body, supports pointer, wheel,
 and keyboard input, and is accompanied by a textual date so selection is never
 communicated by color alone.
+
+## Personal sync
+
+The cloud action opens account and sync settings on every screen size. The first
+upload is started explicitly with “Save and sync”. Subsequent saved changes and
+app resumes trigger sync while the app is in the foreground; offline failures retry
+every minute. Unsaved edits defer background sync. A compact status states whether
+files are synchronized, remain local, or require conflict resolution.
+
+A three-way file merge uses the last common local baseline, with server revision
+checks to prevent concurrent overwrites. Conflicting edits/deletes require a choice
+per file. Downloads are checked with SHA-256 before application. Replaced/deleted
+local files are copied to `.trash/sync/`; drafts and local trash are not uploaded.
+Each local vault is bound to one server/account to prevent accidental cross-account
+uploads. Authentication sessions use platform secure storage.
+
+References: [Flutter adaptive design](https://docs.flutter.dev/ui/adaptive-responsive),
+[display feature sub-screens](https://api.flutter.dev/flutter/widgets/DisplayFeatureSubScreen-class.html),
+[Forui navigation](https://forui.dev/docs/widgets/navigation/bottom-navigation-bar).

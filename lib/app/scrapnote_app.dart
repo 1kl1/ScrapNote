@@ -3,6 +3,14 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../features/sync/sync_account_page.dart';
+import '../infrastructure/sync/sync_bootstrap.dart';
+import '../infrastructure/sync/sync_manifest.dart';
+import '../infrastructure/sync/supabase_sync_remote.dart';
+import '../infrastructure/sync/vault_sync_engine.dart';
+import '../features/expenses/expense_controller.dart';
+import '../features/expenses/expenses_view.dart';
 
 import 'package:file_selector/file_selector.dart';
 import '../domain/scrap.dart';
@@ -36,8 +44,10 @@ class ScrapnoteApp extends StatelessWidget {
   const ScrapnoteApp({
     super.key,
     this.controller,
+    this.syncClient,
     this.editorSessionController,
     this.noteController,
+    this.expenseController,
     this.recoveryStore,
     this.windowCloseGuard,
     this.imagePathPicker,
@@ -47,8 +57,10 @@ class ScrapnoteApp extends StatelessWidget {
   });
 
   final ScrapController? controller;
+  final SupabaseClient? syncClient;
   final EditorSessionController? editorSessionController;
   final NoteController? noteController;
+  final ExpenseController? expenseController;
   final EditorRecoveryStore? recoveryStore;
   final WindowCloseGuard? windowCloseGuard;
   final ImagePathPicker? imagePathPicker;
@@ -66,8 +78,10 @@ class ScrapnoteApp extends StatelessWidget {
       supportedLocales: FLocalizations.supportedLocales,
       home: ScrapnoteWorkspace(
         controller: controller,
+        syncClient: syncClient,
         editorSessionController: editorSessionController,
         noteController: noteController,
+        expenseController: expenseController,
         recoveryStore: recoveryStore,
         windowCloseGuard: windowCloseGuard,
         imagePathPicker: imagePathPicker,
@@ -83,8 +97,10 @@ class ScrapnoteWorkspace extends StatefulWidget {
   const ScrapnoteWorkspace({
     super.key,
     this.controller,
+    this.syncClient,
     this.editorSessionController,
     this.noteController,
+    this.expenseController,
     this.recoveryStore,
     this.windowCloseGuard,
     this.imagePathPicker,
@@ -94,8 +110,10 @@ class ScrapnoteWorkspace extends StatefulWidget {
   });
 
   final ScrapController? controller;
+  final SupabaseClient? syncClient;
   final EditorSessionController? editorSessionController;
   final NoteController? noteController;
+  final ExpenseController? expenseController;
   final EditorRecoveryStore? recoveryStore;
   final WindowCloseGuard? windowCloseGuard;
   final ImagePathPicker? imagePathPicker;
@@ -107,7 +125,8 @@ class ScrapnoteWorkspace extends StatefulWidget {
   State<ScrapnoteWorkspace> createState() => _ScrapnoteWorkspaceState();
 }
 
-class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
+class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
+    with WidgetsBindingObserver {
   static const _imageExtensions = <String>{
     '.bmp',
     '.gif',
@@ -124,6 +143,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   late final ScrapController _controller;
   late final EditorSessionController _editorSession;
   late final NoteController _noteController;
+  late final ExpenseController _expenseController;
   late final EditorRecoveryStore _recoveryStore;
   late final WindowCloseGuard _windowCloseGuard;
   late final EditorCommands _editorCommands;
@@ -140,14 +160,22 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   ScrapnoteSection _section = ScrapnoteSection.scraps;
   late DateTime _selectedDate;
   Timer? _recoveryTimer;
+  Timer? _syncTimer;
+  Timer? _syncRetry;
+  bool _syncInFlight = false;
+  bool _foreground = true;
+  String _syncStatus = '아직 동기화하지 않았습니다.';
   String? _boundSessionId;
   String? _boundNoteSessionId;
   String? _preparedVaultPath;
+  String? _notesRecoveryVault;
+  Future<void> _recoveryWrite = Future.value();
   String? _localError;
   bool _syncingEditor = false;
   bool _syncingNoteEditor = false;
   bool _saveInFlight = false;
   bool _readingClipboard = false;
+  bool _choosingImages = false;
   bool _recoveryLoaded = false;
   bool _preparingEditorSession = false;
   bool _windowGuardStarted = false;
@@ -155,10 +183,12 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller = widget.controller ?? ScrapController();
     _editorSession =
         widget.editorSessionController ?? EditorSessionController();
     _noteController = widget.noteController ?? NoteController();
+    _expenseController = widget.expenseController ?? ExpenseController();
     _recoveryStore = widget.recoveryStore ?? EditorRecoveryStore();
     _windowCloseGuard = widget.windowCloseGuard ?? WindowCloseGuard();
     _editorCommands = EditorCommands();
@@ -179,6 +209,15 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
     _noteController.addListener(_handleNoteControllerChanged);
     FocusManager.instance.addEarlyKeyEventHandler(_handleGlobalKeyEvent);
 
+    _controller.addListener(_scheduleSync);
+    _noteController.addListener(_scheduleSync);
+    _expenseController.addListener(_scheduleSync);
+    if (widget.syncClient != null) {
+      _syncRetry = Timer.periodic(
+        const Duration(seconds: 60),
+        (_) => _scheduleSync(),
+      );
+    }
     final today = DateTime.now();
     _selectedDate = DateTime(today.year, today.month, today.day);
     if (widget.initializeController) {
@@ -186,6 +225,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
     } else if (_controller.hasVault) {
       unawaited(_prepareEditorSession());
       unawaited(_noteController.connect(_controller.vaultPath!));
+      unawaited(_expenseController.connect(_controller.vaultPath!));
     }
     if (widget.installWindowCloseGuard) {
       unawaited(_startWindowCloseGuard());
@@ -201,6 +241,13 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _syncTimer?.cancel();
+    _syncRetry?.cancel();
+    _controller.removeListener(_scheduleSync);
+    _noteController.removeListener(_scheduleSync);
+    _expenseController.removeListener(_scheduleSync);
+    if (widget.expenseController == null) _expenseController.dispose();
     _recoveryTimer?.cancel();
     unawaited(_persistRecovery());
     if (_windowGuardStarted) {
@@ -216,7 +263,13 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
     _editorSession.removeListener(_handleEditorSessionChanged);
     _noteController.removeListener(_handleNoteControllerChanged);
     FocusManager.instance.removeEarlyKeyEventHandler(_handleGlobalKeyEvent);
-    for (final imagePath in _temporaryImagePaths) {
+    final pending = {
+      for (final document in _editorSession.documents)
+        ...document.pendingImagePaths,
+      for (final document in _noteController.documents)
+        ...document.pendingImagePaths,
+    };
+    for (final imagePath in _temporaryImagePaths.difference(pending)) {
       unawaited(_deleteTemporaryImage(imagePath));
     }
     if (_ownsEditorSession) {
@@ -254,10 +307,31 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
           section: _section,
           onSectionChanged: (section) => setState(() => _section = section),
           vaultPath: _controller.vaultPath,
-          onChooseVault: () => unawaited(_chooseVault()),
+          onSync: () => unawaited(_openSync()),
+          onChooseVault: _syncInFlight ? null : () => unawaited(_chooseVault()),
           body: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
+              if (_syncInFlight) const LinearProgressIndicator(minHeight: 2),
+              if (widget.syncClient != null && !_syncInFlight)
+                GestureDetector(
+                  onTap: () => unawaited(_openSync()),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
+                    child: Text(
+                      _syncStatus,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: ScrapnoteTokens.mutedInk,
+                      ),
+                    ),
+                  ),
+                ),
               if (_controller.loading)
                 const LinearProgressIndicator(
                   minHeight: 2,
@@ -267,18 +341,132 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
               if (error != null)
                 _ErrorStrip(message: error, onDismiss: _dismissError),
               Expanded(
-                child: _controller.hasVault
-                    ? _buildSection()
-                    : VaultOnboarding(
-                        loading: _controller.loading,
-                        onChooseVault: () => unawaited(_chooseVault()),
-                      ),
+                child: AbsorbPointer(
+                  absorbing: _syncInFlight,
+                  child: _controller.hasVault
+                      ? _buildSection()
+                      : VaultOnboarding(
+                          loading: _controller.loading,
+                          onChooseVault: () => unawaited(_chooseVault()),
+                        ),
+                ),
               ),
             ],
           ),
         );
       },
     );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    if (_foreground) {
+      _scheduleSync();
+    } else {
+      unawaited(_persistRecovery());
+    }
+  }
+
+  void _scheduleSync() {
+    if (!mounted || widget.syncClient == null || _syncInFlight) return;
+    _syncTimer?.cancel();
+    _syncTimer = Timer(const Duration(seconds: 2), () {
+      if (_foreground && ModalRoute.of(context)?.isCurrent != false) {
+        unawaited(_performSync());
+      }
+    });
+  }
+
+  Future<void> _openSync() async {
+    if (_syncInFlight) return;
+    final client = widget.syncClient;
+    if (client == null) {
+      setState(
+        () => _localError =
+            '계정 연결을 시작하지 못했습니다. 앱을 다시 열어 주세요. 로컬 편집은 계속 사용할 수 있습니다.',
+      );
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SyncAccountPage(
+          client: client,
+          status: _syncStatus,
+          onSync: (resolutions) =>
+              _performSync(manual: true, resolutions: resolutions),
+        ),
+      ),
+    );
+    if (mounted && client.auth.currentUser == null) {
+      setState(() => _syncStatus = '기기에 저장됨 · 로그인하면 다른 기기와 연결할 수 있습니다.');
+    }
+    _scheduleSync();
+  }
+
+  Future<String> _performSync({
+    bool manual = false,
+    Map<String, SyncResolution> resolutions = const {},
+  }) async {
+    final client = widget.syncClient;
+    final vaultPath = _controller.vaultPath;
+    if (_syncInFlight ||
+        client?.auth.currentUser == null ||
+        vaultPath == null ||
+        _controller.loading ||
+        _controller.saving ||
+        _saveInFlight ||
+        _readingClipboard ||
+        _choosingImages ||
+        _noteController.saving ||
+        _noteController.loading ||
+        _expenseController.saving ||
+        _expenseController.loading) {
+      return '저장소와 로그인 상태를 확인한 뒤 다시 시도해 주세요.';
+    }
+    // First upload is explicitly initiated in the account page.
+    if (!manual &&
+        !await File(path.join(vaultPath, '.sync', 'state.json')).exists()) {
+      return _syncStatus;
+    }
+    if (!mounted || _syncInFlight) return _syncStatus;
+    if (!manual &&
+        (_editorSession.hasDirtyDocuments ||
+            _noteController.hasDirtyDocuments)) {
+      return '편집 내용을 저장하면 동기화합니다.';
+    }
+    setState(() => _syncInFlight = true);
+    try {
+      if (manual && !await _saveAllDirtyDocuments()) {
+        return _syncStatus = '저장하지 못한 문서가 있습니다. 내용을 확인한 뒤 다시 시도해 주세요.';
+      }
+      final engine = VaultSyncEngine(
+        Directory(vaultPath),
+        SupabaseSyncRemote(client!, SyncBootstrap.url),
+      );
+      await engine.synchronize(resolutions: resolutions);
+      if (!mounted) return _syncStatus;
+      await _controller.reload();
+      _editorSession.refreshSavedDocuments(_controller.scraps);
+      await _noteController.reloadAfterSync();
+      await _expenseController.reloadAfterSync();
+      final now = TimeOfDay.now();
+      _syncStatus =
+          '동기화 완료 · ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+      return _syncStatus;
+    } on SyncConflicts {
+      _syncStatus = '동기화 충돌 · 계정 및 동기화에서 사용할 내용을 선택해 주세요.';
+      if (manual) rethrow;
+      return _syncStatus;
+    } on FormatException catch (error) {
+      _syncStatus = error.message;
+      return _syncStatus;
+    } on Exception {
+      _syncStatus = '동기화하지 못했습니다 · 기기에는 저장됨. 연결 후 다시 시도합니다.';
+      return _syncStatus;
+    } finally {
+      if (mounted) setState(() => _syncInFlight = false);
+    }
   }
 
   Widget _buildSection() {
@@ -315,7 +503,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
         onSave: () => unawaited(_saveActiveDocument()),
         onChooseImages: () => unawaited(_chooseImages()),
         onImagesDropped: _addImagePaths,
-        onPasteImage: () => unawaited(_pasteImage()),
+        onPasteImage: _pasteImage,
         onRemoveImage: _removeImage,
       ),
       ScrapnoteSection.notes => NotesWorkspace(
@@ -338,10 +526,11 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
         onSave: () => unawaited(_saveActiveNote()),
         onCloseTab: (sessionId) => unawaited(_requestCloseNoteTab(sessionId)),
         onChooseImages: () => unawaited(_chooseImages()),
-        onPasteImage: () => unawaited(_pasteImage()),
+        onPasteImage: _pasteImage,
         onImagesDropped: _addImagePaths,
         onRemoveImage: _removeImage,
       ),
+      ScrapnoteSection.expenses => ExpensesView(controller: _expenseController),
       ScrapnoteSection.timeline => TimelineView(
         scraps: _controller.scraps,
         selectedDate: _selectedDate,
@@ -358,6 +547,9 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
     }
     await _prepareEditorSession();
     await _noteController.connect(_controller.vaultPath!);
+    await _expenseController.connect(_controller.vaultPath!);
+    await _restoreNotesRecovery();
+    _scheduleSync();
   }
 
   Future<void> _prepareEditorSession() async {
@@ -404,6 +596,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   }
 
   Future<void> _handleNativeSaveRequested() async {
+    if (_syncInFlight) return;
     if (ModalRoute.of(context)?.isCurrent == false) return;
     if (!mounted || !_controller.hasVault) return;
     if (_section == ScrapnoteSection.scraps) {
@@ -414,6 +607,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   }
 
   Future<void> _handleNativeNewDocumentRequested() async {
+    if (_syncInFlight) return;
     if (ModalRoute.of(context)?.isCurrent == false) return;
     if (!mounted || !_controller.hasVault) return;
     if (_section == ScrapnoteSection.scraps) {
@@ -424,6 +618,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   }
 
   Future<void> _handleNativeCloseDocumentRequested() async {
+    if (_syncInFlight) return;
     if (ModalRoute.of(context)?.isCurrent == false) return;
     await _closeActiveDocument();
   }
@@ -446,13 +641,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
         event is! KeyDownEvent ||
         (!HardwareKeyboard.instance.isMetaPressed &&
             !HardwareKeyboard.instance.isControlPressed) ||
-        !_controller.hasVault) {
-      return KeyEventResult.ignored;
-    }
-    if (event.logicalKey == LogicalKeyboardKey.keyV &&
-        (_section == ScrapnoteSection.scraps ||
-            _section == ScrapnoteSection.notes)) {
-      unawaited(_pasteImage());
+        (!_controller.hasVault || _syncInFlight)) {
       return KeyEventResult.ignored;
     }
     if (event.logicalKey == LogicalKeyboardKey.keyS) {
@@ -491,6 +680,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   }
 
   void _handleNoteControllerChanged() {
+    _scheduleRecovery();
     final active = _noteController.activeDocument;
     if (active == null) {
       _boundNoteSessionId = null;
@@ -549,14 +739,33 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
     );
   }
 
-  Future<void> _persistRecovery() async {
+  Future<void> _restoreNotesRecovery() async {
+    final vault = _noteController.vaultPath;
+    if (vault == null || _notesRecoveryVault == vault) return;
     try {
-      await _recoveryStore.save(_editorSession.toSnapshot());
-    } on Exception catch (error) {
+      final rows = await _recoveryStore.loadNotes(vault);
+      if (mounted) _noteController.restoreRecovery(rows);
+      _notesRecoveryVault = vault;
+    } on Exception {
       if (mounted) {
-        setState(() => _localError = '복구 초안을 저장하지 못했습니다. $error');
+        setState(() => _localError = '노트 복구 파일을 읽지 못했습니다. 원본 복구 파일은 유지됩니다.');
       }
     }
+  }
+
+  Future<void> _persistRecovery() {
+    final snapshot = _editorSession.toSnapshot();
+    final vault = _noteController.vaultPath;
+    final notes = _noteController.recoveryDocuments();
+    final saveNotes = vault != null && vault == _notesRecoveryVault;
+    return _recoveryWrite = _recoveryWrite.then((_) async {
+      try {
+        await _recoveryStore.save(snapshot);
+        if (saveNotes) await _recoveryStore.saveNotes(vault, notes);
+      } on Exception catch (error) {
+        if (mounted) setState(() => _localError = '복구 초안을 저장하지 못했습니다. $error');
+      }
+    });
   }
 
   void _newDocument() {
@@ -645,11 +854,13 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
       }
     }
 
+    await _persistRecovery();
     final selected = await _controller.chooseVault();
     if (!selected || !mounted) {
       return;
     }
     await _noteController.connect(_controller.vaultPath!);
+    await _expenseController.connect(_controller.vaultPath!);
 
     if (_recoveryLoaded || pendingChoice != null) {
       _preparedVaultPath = _controller.vaultPath;
@@ -660,9 +871,13 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
     } else {
       await _prepareEditorSession();
     }
+    await _restoreNotesRecovery();
+    _scheduleSync();
   }
 
   Future<void> _chooseImages() async {
+    if (_choosingImages || _syncInFlight) return;
+    _choosingImages = true;
     _ensureActiveDocument();
     try {
       _addImagePaths(await _imagePathPicker());
@@ -670,11 +885,15 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
       if (mounted) {
         setState(() => _localError = '이미지 선택기를 열지 못했습니다. $error');
       }
+    } finally {
+      _choosingImages = false;
     }
   }
 
-  Future<void> _pasteImage() async {
-    if (_readingClipboard || _saveInFlight || _noteController.saving) return;
+  Future<bool> _pasteImage() async {
+    if (_readingClipboard || _saveInFlight || _noteController.saving) {
+      return true;
+    }
     _readingClipboard = true;
     final section = _section;
     final session = section == ScrapnoteSection.notes
@@ -687,25 +906,29 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
     final body = textController.text;
     try {
       final imagePath = await _clipboardImageReader();
-      if (imagePath == null || !mounted) {
-        return;
+      if (imagePath == null) return false;
+      if (!mounted) {
+        await _deleteTemporaryImage(imagePath);
+        return true;
       }
       final currentSession = section == ScrapnoteSection.notes
           ? _noteController.activeSessionId
           : _editorSession.activeSessionId;
       if (_section != section || currentSession != session) {
         await _deleteTemporaryImage(imagePath);
-        return;
+        return true;
       }
       if (textController.text == body && selection.isValid) {
         textController.selection = selection;
       }
       _temporaryImagePaths.add(imagePath);
       _addImagePaths(<String>[imagePath]);
+      return true;
     } on Exception catch (error) {
       if (mounted) {
         setState(() => _localError = '클립보드 이미지를 읽지 못했습니다. $error');
       }
+      return true;
     } finally {
       _readingClipboard = false;
     }
@@ -905,6 +1128,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace> {
   }
 
   Future<bool> _handleWindowCloseRequest() async {
+    if (_syncInFlight) return false;
     if (!mounted ||
         (!_editorSession.hasDirtyDocuments &&
             !_noteController.hasDirtyDocuments)) {

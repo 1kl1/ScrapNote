@@ -7,41 +7,77 @@ import 'package:scrapnote/features/editor/inline_document_editor.dart';
 import 'package:scrapnote/features/editor/inline_image.dart';
 
 void main() {
-  testWidgets(
-    'bold keyboard shortcut and toolbar operate on the selected line',
-    (tester) async {
-      final controller = TextEditingController(text: 'First line\nSecond line');
-      addTearDown(controller.dispose);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: FTheme(
-            data: ScrapnoteTheme.foruiTheme,
-            child: Scaffold(
-              body: InlineDocumentEditor(
-                controller: controller,
-                imageDirectory: '/tmp',
-              ),
+  testWidgets('Backspace joins lines after an image is removed', (
+    tester,
+  ) async {
+    final controller = TextEditingController(
+      text: 'Before\n![Image](file:///tmp/missing.png)\nAfter',
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FTheme(
+          data: ScrapnoteTheme.foruiTheme,
+          child: Scaffold(
+            body: InlineDocumentEditor(
+              controller: controller,
+              imageDirectory: '/tmp',
             ),
           ),
         ),
-      );
-      await tester.pumpAndSettle();
-      final field = tester.widget<EditableText>(find.byType(EditableText));
-      field.controller.selection = const TextSelection(
-        baseOffset: 11,
-        extentOffset: 17,
-      );
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
-      await tester.pump();
-      expect(controller.text, 'First line\n**Second** line');
-      await tester.tap(find.byTooltip('Bold · ⌘B / Ctrl+B'));
-      await tester.pumpAndSettle();
-      expect(controller.text, 'First line\nSecond line');
-      expect(tester.takeException(), isNull);
-    },
-  );
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Remove image'));
+    await tester.pumpAndSettle();
+    expect(find.byType(EditableText), findsOneWidget);
+    final field = tester.widget<EditableText>(find.byType(EditableText));
+    field.controller.selection = const TextSelection.collapsed(offset: 7);
+    field.focusNode.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    await tester.pumpAndSettle();
+    expect(controller.text, 'BeforeAfter');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('bold shortcut remains available without a toolbar button', (
+    tester,
+  ) async {
+    final controller = TextEditingController(text: 'First line\nSecond line');
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FTheme(
+          data: ScrapnoteTheme.foruiTheme,
+          child: Scaffold(
+            body: InlineDocumentEditor(
+              controller: controller,
+              imageDirectory: '/tmp',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final field = tester.widget<EditableText>(find.byType(EditableText));
+    field.controller.selection = const TextSelection(
+      baseOffset: 11,
+      extentOffset: 17,
+    );
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(controller.text, 'First line\n**Second** line');
+    expect(find.byTooltip('Bold · ⌘B / Ctrl+B'), findsNothing);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(controller.text, 'First line\nSecond line');
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('removing an embedded Scrap releases pending images inside it', (
     tester,

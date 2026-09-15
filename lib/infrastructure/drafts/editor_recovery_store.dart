@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -81,6 +82,31 @@ class EditorRecoveryStore {
   Future<void> clear() async {
     await _io.delete(await _pathProvider());
   }
+
+  Future<List<Map<String, dynamic>>> loadNotes(String vaultPath) async {
+    final filePath = await _notesPath(vaultPath);
+    if (!await _io.exists(filePath)) return [];
+    final data = jsonDecode(await _io.read(filePath));
+    if (data is! List) {
+      throw const FormatException('Invalid note recovery data.');
+    }
+    return data.map((row) => Map<String, dynamic>.from(row as Map)).toList();
+  }
+
+  Future<void> saveNotes(
+    String vaultPath,
+    List<Map<String, Object?>> documents,
+  ) async {
+    final filePath = await _notesPath(vaultPath);
+    if (documents.isEmpty) {
+      await _io.delete(filePath);
+    } else {
+      await _io.writeAtomically(filePath, jsonEncode(documents));
+    }
+  }
+
+  Future<String> _notesPath(String vaultPath) async =>
+      '${await _pathProvider()}.${sha256.convert(utf8.encode(vaultPath))}.notes.json';
 
   static Future<String> _defaultRecoveryPath() async {
     final support = await getApplicationSupportDirectory();

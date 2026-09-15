@@ -27,6 +27,26 @@ class EditorSessionController extends ChangeNotifier {
   EditorDocument? get activeDocument => _documentFor(_activeSessionId);
   bool get hasDirtyDocuments => _documents.any((document) => document.dirty);
 
+  /// Refresh saved tabs after a sync; never overwrite an unsaved draft.
+  void refreshSavedDocuments(List<Scrap> scraps) {
+    final byId = {for (final scrap in scraps) scrap.id: scrap};
+    _documents = [
+      for (final document in _documents)
+        if (document.dirty || document.scrap == null)
+          document
+        else if (byId[document.scrap!.id] case final saved?)
+          document.copyWith(
+            scrap: saved,
+            body: saved.body,
+            savedBody: saved.body,
+          ),
+    ];
+    if (_documentFor(_activeSessionId) == null) {
+      _activeSessionId = _documents.lastOrNull?.sessionId;
+    }
+    notifyListeners();
+  }
+
   EditorDocument newDocument() {
     final document = EditorDocument(
       sessionId: _newSessionId(),

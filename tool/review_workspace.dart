@@ -1,6 +1,9 @@
 // Run with: flutter test tool/review_workspace.dart
 // Writes review screenshots to build/review without accessing the user's Vault.
 import 'dart:io';
+import 'package:scrapnote/features/expenses/expense_controller.dart';
+import 'package:scrapnote/features/expenses/expense_record.dart';
+import 'package:scrapnote/features/expenses/expenses_view.dart';
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -127,7 +130,7 @@ void main() {
                 onSave: () {},
                 onCloseTab: (_) {},
                 onChooseImages: () {},
-                onPasteImage: () {},
+                onPasteImage: () async => false,
                 onImagesDropped: (_) {},
                 onRemoveImage: (_) {},
               ),
@@ -160,5 +163,74 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     await capture('notes-saved-document');
+  });
+  testWidgets('capture expense grid and expanded dashboard', (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final folder = Directory.systemTemp.createTempSync('expense-review-');
+    addTearDown(() => folder.deleteSync(recursive: true));
+    final expenses = ExpenseController(today: DateTime(2026, 9, 14));
+    addTearDown(expenses.dispose);
+    await tester.runAsync(() async {
+      await expenses.connect(folder.path);
+      final names = [
+        'Blue Bottle',
+        'City Books',
+        'Market Basket',
+        'Metro',
+        'Figma',
+        'Corner Bakery',
+        'Lunch on Main',
+        'Stationery Shop',
+      ];
+      final amounts = [6800, 24000, 52800, 1500, 1500, 8700, 14500, 1234];
+      for (var i = 0; i < names.length; i++) {
+        await expenses.save(
+          ExpenseRecord(
+            id: 'demo-$i',
+            date: DateTime(2026, 9, 14 - i),
+            merchant: names[i],
+            amount: amounts[i],
+            currency: i == 4 || i == 7
+                ? ExpenseCurrency.usd
+                : ExpenseCurrency.krw,
+            memo: i == 1 ? 'A book for the trip' : '',
+          ),
+        );
+      }
+    });
+    final boundary = GlobalKey();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ScrapnoteTheme.materialTheme,
+        home: RepaintBoundary(
+          key: boundary,
+          child: ScrapnoteShell(
+            section: ScrapnoteSection.expenses,
+            onSectionChanged: (_) {},
+            body: ExpensesView(controller: expenses),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    Future<void> capture(String name) => tester.runAsync(() async {
+      final image =
+          await (boundary.currentContext!.findRenderObject()
+                  as RenderRepaintBoundary)
+              .toImage();
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      await File(
+        'build/review/$name.png',
+      ).writeAsBytes(bytes!.buffer.asUint8List());
+      image.dispose();
+    });
+    await capture('expenses-grid');
+    await tester.tap(find.byKey(const ValueKey('expand-expense-dashboard')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await capture('expenses-dashboard');
   });
 }

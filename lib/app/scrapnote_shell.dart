@@ -9,7 +9,7 @@ const _activityButtonStyle = FButtonStyleDelta.delta(
   focusedOutlineStyle: FFocusedOutlineStyleDelta.delta(spacing: -2),
 );
 
-enum ScrapnoteSection { scraps, notes, timeline }
+enum ScrapnoteSection { scraps, notes, expenses, timeline }
 
 /// The fixed activity rail around every Scrapnote editor workbench.
 class ScrapnoteShell extends StatelessWidget {
@@ -19,11 +19,13 @@ class ScrapnoteShell extends StatelessWidget {
     required this.body,
     this.vaultPath,
     this.onChooseVault,
+    this.onSync,
     super.key,
   });
 
   static const scrapsNavigationKey = ValueKey<String>('nav-scraps');
   static const notesNavigationKey = ValueKey<String>('nav-notes');
+  static const expensesNavigationKey = ValueKey<String>('nav-expenses');
   static const timelineNavigationKey = ValueKey<String>('nav-timeline');
   static const vaultActionKey = ValueKey<String>('vault-action');
   static const activityRailKey = ValueKey<String>('activity-rail');
@@ -34,11 +36,12 @@ class ScrapnoteShell extends StatelessWidget {
   final String? vaultPath;
   final VoidCallback? onChooseVault;
   final Widget body;
+  final VoidCallback? onSync;
 
   @override
   Widget build(BuildContext context) {
     return FTheme(
-      data: ScrapnoteTheme.foruiTheme,
+      data: ScrapnoteTheme.forContext(context),
       child: Shortcuts(
         shortcuts: const <ShortcutActivator, Intent>{
           SingleActivator(LogicalKeyboardKey.digit1, meta: true):
@@ -46,12 +49,16 @@ class ScrapnoteShell extends StatelessWidget {
           SingleActivator(LogicalKeyboardKey.digit2, meta: true):
               _SelectSectionIntent(ScrapnoteSection.notes),
           SingleActivator(LogicalKeyboardKey.digit3, meta: true):
+              _SelectSectionIntent(ScrapnoteSection.expenses),
+          SingleActivator(LogicalKeyboardKey.digit4, meta: true):
               _SelectSectionIntent(ScrapnoteSection.timeline),
           SingleActivator(LogicalKeyboardKey.digit1, control: true):
               _SelectSectionIntent(ScrapnoteSection.scraps),
           SingleActivator(LogicalKeyboardKey.digit2, control: true):
               _SelectSectionIntent(ScrapnoteSection.notes),
           SingleActivator(LogicalKeyboardKey.digit3, control: true):
+              _SelectSectionIntent(ScrapnoteSection.expenses),
+          SingleActivator(LogicalKeyboardKey.digit4, control: true):
               _SelectSectionIntent(ScrapnoteSection.timeline),
         },
         child: Actions(
@@ -69,35 +76,116 @@ class ScrapnoteShell extends StatelessWidget {
             autofocus: true,
             child: FocusTraversalGroup(
               policy: OrderedTraversalPolicy(),
-              child: FScaffold(
-                childPad: false,
-                child: Material(
-                  color: ScrapnoteTokens.paper,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      SizedBox(
-                        key: activityRailKey,
-                        width: ScrapnoteTokens.activityRailWidth,
-                        child: _ActivityRail(
-                          section: section,
-                          onSectionChanged: onSectionChanged,
-                          vaultPath: vaultPath,
-                          onChooseVault: onChooseVault,
-                        ),
+              child: DisplayFeatureSubScreen(
+                child: FScaffold(
+                  childPad: false,
+                  child: SafeArea(
+                    child: Material(
+                      color: ScrapnoteTokens.paper,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final compact = constraints.maxWidth < 600;
+                          final content = ColoredBox(
+                            key: bodyKey,
+                            color: ScrapnoteTokens.paper,
+                            child: Semantics(
+                              container: true,
+                              label: '${section.label} workspace',
+                              child: body,
+                            ),
+                          );
+                          if (compact) {
+                            return Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    const SizedBox(width: 12),
+                                    Expanded(child: Text(section.label)),
+                                    if (onSync != null) _syncButton(),
+                                    if (vaultPath == null || onSync == null)
+                                      _VaultFooter(
+                                        vaultPath: vaultPath,
+                                        onChooseVault: onChooseVault,
+                                      ),
+                                  ],
+                                ),
+                                Expanded(child: content),
+                                if (MediaQuery.viewInsetsOf(context).bottom ==
+                                    0)
+                                  FBottomNavigationBar(
+                                    key: const ValueKey('bottom-navigation'),
+                                    index: section.index,
+                                    onChange: (index) => onSectionChanged(
+                                      ScrapnoteSection.values[index],
+                                    ),
+                                    children: const [
+                                      FBottomNavigationBarItem(
+                                        key: scrapsNavigationKey,
+                                        icon: Icon(FLucideIcons.inbox),
+                                        label: Text(
+                                          'Scraps',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      FBottomNavigationBarItem(
+                                        key: notesNavigationKey,
+                                        icon: Icon(FLucideIcons.notebookText),
+                                        label: Text(
+                                          'Notes',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      FBottomNavigationBarItem(
+                                        key: expensesNavigationKey,
+                                        icon: Icon(FLucideIcons.wallet),
+                                        label: Text(
+                                          'Expenses',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      FBottomNavigationBarItem(
+                                        key: timelineNavigationKey,
+                                        icon: Icon(FLucideIcons.calendarClock),
+                                        label: Text(
+                                          'Timeline',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                              ],
+                            );
+                          }
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              SizedBox(
+                                key: activityRailKey,
+                                width: ScrapnoteTokens.activityRailWidth,
+                                child: Column(
+                                  children: [
+                                    Expanded(
+                                      child: _ActivityRail(
+                                        section: section,
+                                        onSectionChanged: onSectionChanged,
+                                        vaultPath: vaultPath,
+                                        onChooseVault: onChooseVault,
+                                      ),
+                                    ),
+                                    if (onSync != null) _syncButton(),
+                                  ],
+                                ),
+                              ),
+                              Expanded(child: content),
+                            ],
+                          );
+                        },
                       ),
-                      Expanded(
-                        child: ColoredBox(
-                          key: bodyKey,
-                          color: ScrapnoteTokens.paper,
-                          child: Semantics(
-                            container: true,
-                            label: '${section.label} workspace',
-                            child: body,
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -107,6 +195,17 @@ class ScrapnoteShell extends StatelessWidget {
       ),
     );
   }
+
+  Widget _syncButton() => SizedBox.square(
+    dimension: 48,
+    child: FButton.icon(
+      key: const ValueKey('sync-action'),
+      variant: FButtonVariant.ghost,
+      semanticsLabel: 'Account and sync',
+      onPress: onSync,
+      child: const Icon(FLucideIcons.cloud, size: 20),
+    ),
+  );
 }
 
 class _ActivityRail extends StatelessWidget {
@@ -157,11 +256,20 @@ class _ActivityRail extends StatelessWidget {
               onPress: () => onSectionChanged(ScrapnoteSection.notes),
             ),
             _ActivityDestination(
-              key: ScrapnoteShell.timelineNavigationKey,
+              key: ScrapnoteShell.expensesNavigationKey,
               order: 3,
+              selected: section == ScrapnoteSection.expenses,
+              label: ScrapnoteSection.expenses.label,
+              shortcut: '3',
+              icon: FLucideIcons.wallet,
+              onPress: () => onSectionChanged(ScrapnoteSection.expenses),
+            ),
+            _ActivityDestination(
+              key: ScrapnoteShell.timelineNavigationKey,
+              order: 4,
               selected: section == ScrapnoteSection.timeline,
               label: ScrapnoteSection.timeline.label,
-              shortcut: '3',
+              shortcut: '4',
               icon: FLucideIcons.calendarClock,
               onPress: () => onSectionChanged(ScrapnoteSection.timeline),
             ),
@@ -312,6 +420,7 @@ extension on ScrapnoteSection {
   String get label => switch (this) {
     ScrapnoteSection.scraps => 'Scraps',
     ScrapnoteSection.notes => 'Notes',
+    ScrapnoteSection.expenses => 'Expenses',
     ScrapnoteSection.timeline => 'Timeline',
   };
 }

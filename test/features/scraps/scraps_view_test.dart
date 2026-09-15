@@ -27,7 +27,7 @@ void main() {
     ValueChanged<String>? onTabClosed,
     ValueChanged<String>? onRemove,
     ValueChanged<List<String>>? onDropped,
-    VoidCallback? onPaste,
+    Future<bool> Function()? onPaste,
     VoidCallback? onCloseActive,
     ValueChanged<String>? onDelete,
   }) async {
@@ -155,7 +155,10 @@ void main() {
       tester,
       images: const <String>[imagePath],
       onDropped: (_) {},
-      onPaste: () => pasteCount += 1,
+      onPaste: () async {
+        pasteCount += 1;
+        return true;
+      },
       onRemove: (value) => removedPath = value,
     );
 

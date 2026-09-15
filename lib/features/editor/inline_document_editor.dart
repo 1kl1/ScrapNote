@@ -19,6 +19,7 @@ class InlineDocumentEditor extends StatefulWidget {
     this.enabled = true,
     this.onRemoveImage,
     this.onAddImage,
+    this.onPasteImage,
     this.editorKey,
     super.key,
   });
@@ -27,6 +28,8 @@ class InlineDocumentEditor extends StatefulWidget {
   final bool enabled;
   final ValueChanged<String>? onRemoveImage;
   final ValueChanged<String>? onAddImage;
+  final Future<bool> Function()? onPasteImage;
+
   final Key? editorKey;
   @override
   State<InlineDocumentEditor> createState() => _InlineDocumentEditorState();
@@ -53,6 +56,7 @@ class _Block {
 class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
   List<_Block> _blocks = [];
   _Block? _lastFocused;
+  bool _pasting = false;
   bool _writing = false;
   String _lastBody = '';
   static final _objects = RegExp(
@@ -194,10 +198,15 @@ class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
 
   void _remove(_Block block) {
     final removedContent = block.content;
+    final caret = _offset(block);
     setState(() {
       _blocks.remove(block);
-      _write();
+      _write(TextSelection.collapsed(offset: caret));
+      // Adjacent text must become one field so Backspace can cross the
+      // former image boundary, rather than stopping at another text field.
+      _parse();
     });
+    _restoreCaret();
     WidgetsBinding.instance.addPostFrameCallback((_) => block.dispose());
     _releaseRemovedImages(removedContent);
   }
@@ -229,29 +238,54 @@ class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
     block.focus.requestFocus();
   }
 
-  @override
-  Widget build(BuildContext context) => CallbackShortcuts(
-    bindings: {
-      const SingleActivator(LogicalKeyboardKey.keyB, meta: true): _toggleBold,
-      const SingleActivator(LogicalKeyboardKey.keyB, control: true):
-          _toggleBold,
-    },
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Padding(
-            padding: const EdgeInsets.only(left: 72, top: 4),
-            child: _action(
-              'Bold · ⌘B / Ctrl+B',
-              FLucideIcons.bold,
-              _toggleBold,
-            ),
-          ),
+  Future<void> _paste() async {
+    if (_pasting || !widget.enabled) return;
+    _pasting = true;
+    final block = _blocks.contains(_lastFocused)
+        ? _lastFocused!
+        : _blocks.firstWhere((b) => b.kind == _Kind.text);
+    final value = block.controller.value;
+    try {
+      if (await widget.onPasteImage?.call() == true) return;
+      final clipboard = await Clipboard.getData(Clipboard.kTextPlain);
+      if (!mounted || !_blocks.contains(block) || clipboard?.text == null) {
+        return;
+      }
+      // Ignore an outdated paste if the user edited or switched the field.
+      if (block.controller.value != value) return;
+      final selection = value.selection;
+      final start = selection.isValid ? selection.start : value.text.length;
+      final end = selection.isValid ? selection.end : start;
+      block.controller.value = TextEditingValue(
+        text: value.text.replaceRange(start, end, clipboard!.text!),
+        selection: TextSelection.collapsed(
+          offset: start + clipboard.text!.length,
         ),
-        Expanded(child: _buildLines()),
-      ],
+      );
+    } finally {
+      _pasting = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Actions(
+    actions: {
+      PasteTextIntent: CallbackAction<PasteTextIntent>(
+        onInvoke: (_) {
+          _paste();
+          return null;
+        },
+      ),
+    },
+    child: CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyV, meta: true): _paste,
+        const SingleActivator(LogicalKeyboardKey.keyV, control: true): _paste,
+        const SingleActivator(LogicalKeyboardKey.keyB, meta: true): _toggleBold,
+        const SingleActivator(LogicalKeyboardKey.keyB, control: true):
+            _toggleBold,
+      },
+      child: _buildLines(),
     ),
   );
 

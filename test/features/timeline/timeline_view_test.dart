@@ -9,6 +9,47 @@ import 'package:scrapnote/features/timeline/timeline_view.dart';
 
 void main() {
   testWidgets(
+    'scrolling varied records keeps a stable extent without a scrollbar',
+    (tester) async {
+      final scraps = List.generate(
+        20,
+        (i) => Scrap(
+          id: 's$i',
+          body: List.generate(
+            i + 1,
+            (j) => 'Record $i paragraph $j.',
+          ).join('\n\n'),
+          createdAt: DateTime(2026, 9, 14, 12, i),
+          updatedAt: DateTime(2026, 9, 14),
+          localDate: '2026-09-14',
+        ),
+      );
+      await tester.pumpWidget(
+        _TimelineHarness(scraps: scraps, selectedDate: DateTime(2026, 9, 14)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(Scrollbar), findsNothing);
+      final list = find.byKey(const ValueKey('timeline-scrap-list'));
+      final scroll = tester.widget<SingleChildScrollView>(list).controller!;
+      final extent = scroll.position.maxScrollExtent;
+      await tester.drag(list, const Offset(0, -400));
+      await tester.pumpAndSettle();
+      expect(scroll.offset, greaterThan(0));
+      expect(scroll.position.maxScrollExtent, extent);
+      expect(
+        tester.widget<TimelineDial>(find.byType(TimelineDial)).selectedDate,
+        DateTime(2026, 9, 14),
+      );
+      await tester.pumpWidget(
+        _TimelineHarness(scraps: scraps, selectedDate: DateTime(2026, 9, 15)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('No scraps on this date.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'groups a scrap by its capture date after the device time zone changes',
     (tester) async {
       final scrap = Scrap(

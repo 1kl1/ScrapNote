@@ -36,23 +36,24 @@ class _ScrapEditDialogState extends State<ScrapEditDialog> {
   bool _reading = false;
   bool _submitted = false;
 
-  Future<void> _paste() async {
-    if (_reading || !widget.allowImagePaste) return;
+  Future<bool> _paste() async {
+    if (_reading || !widget.allowImagePaste) return false;
     setState(() => _reading = true);
     final selection = _controller.selection;
     final body = _controller.text;
     try {
       final imagePath = await ImageClipboard.readImagePath();
-      if (imagePath == null) return;
+      if (imagePath == null) return false;
       if (!mounted) {
         await File(imagePath).delete();
-        return;
+        return true;
       }
       _images.add(imagePath);
       if (_controller.text == body) _controller.selection = selection;
       InlineImage.insert(_controller, InlineImage.markdown(imagePath));
+      return true;
     } on PlatformException {
-      // Ordinary text paste remains handled by the focused text field.
+      return false;
     } finally {
       if (mounted) setState(() => _reading = false);
     }
@@ -86,15 +87,6 @@ class _ScrapEditDialogState extends State<ScrapEditDialog> {
         const SingleActivator(LogicalKeyboardKey.keyS, control: true): _save,
       },
       child: Focus(
-        onKeyEvent: (_, event) {
-          if (event is KeyDownEvent &&
-              event.logicalKey == LogicalKeyboardKey.keyV &&
-              (HardwareKeyboard.instance.isMetaPressed ||
-                  HardwareKeyboard.instance.isControlPressed)) {
-            _paste();
-          }
-          return KeyEventResult.ignored;
-        },
         child: AlertDialog(
           title: const Text('Edit Scrap'),
           content: SizedBox(
@@ -104,6 +96,7 @@ class _ScrapEditDialogState extends State<ScrapEditDialog> {
               controller: _controller,
               imageDirectory: widget.imageDirectory,
               editorKey: const ValueKey('scrap-dialog-editor'),
+              onPasteImage: _paste,
             ),
           ),
           actions: [

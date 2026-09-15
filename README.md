@@ -1,8 +1,11 @@
 # Scrapnote
 
 Scrapnote는 짧게 포착한 생각과 이미지를 로컬 Markdown 파일로 보관하고,
-나중에 Note와 Timeline으로 엮는 데스크톱 앱입니다. Flutter와 Forui로
-구현하며 macOS를 첫 번째 실행 환경으로 삼습니다.
+나중에 Note와 Timeline으로 엮는 Flutter·Forui 앱입니다. macOS와 Android를
+지원하며 휴대폰·폴더블 화면에 맞춰 UI를 조정합니다. 개인 Supabase 계정으로
+노트·스크랩·이미지·가계부를 연동할 수 있습니다.
+
+설치와 동기화 방법은 [Android 및 개인 동기화 가이드](docs/android-sync.md)를 참고하세요.
 
 ## 현재 구현 범위
 
@@ -91,7 +94,7 @@ Note를 저장하면 변경이 보관됩니다. 원본 Scrap은 바뀌지 않습
 Finder에서 복사한 이미지 파일은 파일 아이콘 대신 원본을 읽습니다.
 이전에 아이콘으로 저장된 이미지는 원본을 다시 붙여넣어야 합니다.
 
-편집기의 볼드 버튼 또는 ⌘B / Ctrl+B는 선택한 글에 Markdown 볼드 표시를
+⌘B / Ctrl+B는 선택한 글에 Markdown 볼드 표시를
 적용하거나 해제합니다. 선택 없이 실행하면 커서 위치에 볼드 입력 구간을 만듭니다.
 Note의 저장된 문서 화면에서는 볼드로 표시됩니다.
 
@@ -100,3 +103,34 @@ macOS 클립보드 원본 선택 회귀 테스트:
 swiftc macos/Runner/ClipboardImageReader.swift test/native/clipboard_image_reader_test.swift -o /tmp/scrapnote-clipboard-test
 /tmp/scrapnote-clipboard-test
 ```
+
+## 지출 기록
+
+세 번째 메뉴 Expenses에서 날짜·사용처·금액·통화(KRW/USD)·선택 메모를
+표로 조회합니다. New record로 입력하고, 행 또는 연필 버튼으로 수정합니다.
+날짜는 작성 당일이 기본값이며 클릭하면 달력이 열립니다.
+Monthly와 Weekly로 기간을 전환하고 좌우 화살표로 이동합니다. 주간은
+월요일부터 일요일까지입니다. Today는 현재 기간으로 돌아갑니다.
+
+하단 Overview는 기록 수와 통화별 합계를 보여줍니다. Expand를 누르면
+평균·최대 지출, 이전 기간과의 차이, 주요 사용처를 볼 수 있습니다.
+원화와 달러는 합산하거나 환산하지 않습니다. 달러는 센트 단위 정수로
+보관해 소수점 계산 오차를 피합니다.
+
+데이터는 Vault의 expenses/<id>.json에 저장됩니다. 삭제 기록은
+.trash/expenses로 이동합니다. Excel 내보내기는 추후 기능입니다.
+활동 메뉴와 단축키 순서는 Scrap(1), Note(2), Expenses(3), Timeline(4)입니다.
+
+Timeline은 날짜별 전체 Markdown 높이를 기준으로 스크롤하며 스크롤바를
+숨깁니다. 이미지 삭제 시 인접한 텍스트 입력칸을 합쳐 Backspace로 줄 경계를
+지울 수 있습니다. 이미지 붙여넣기는 일반 텍스트 붙여넣기와 순차 처리하고,
+macOS 클립보드 PNG/TIFF는 8-bit sRGB PNG로 정규화합니다.
+네이티브 클립보드 변경을 적용하려면 macOS 앱을 완전히 다시 실행해야 합니다.
+
+
+## 모바일 입력과 장소 자동완성
+
+휴대폰의 Expenses에서는 **지출 추가**를 눌러 입력하고, 기존 항목을 눌러
+수정합니다. `Where`는 현재 보고 있는 기간뿐 아니라 전체 과거 지출의 장소를
+제안합니다. 중복을 합치고 최대 8개를 보여주며 새로운 장소도 입력할 수 있습니다.
+데스크톱의 신규 입력 행·수정 행에서도 같은 자동완성을 사용합니다.

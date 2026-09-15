@@ -84,88 +84,109 @@ void main() {
     await tester.pump(const Duration(milliseconds: 20));
   }
 
-  testWidgets(
-    'Ctrl+V inserts one image at the body cursor and ordinary text paste still works',
-    (tester) async {
-      String? clipboardText;
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
-            if (call.method == 'Clipboard.setData') {
-              clipboardText = (call.arguments as Map)['text'] as String?;
+  for (final modifier in [
+    LogicalKeyboardKey.controlLeft,
+    LogicalKeyboardKey.metaLeft,
+  ]) {
+    testWidgets(
+      '${modifier.keyLabel}+V inserts one image at the body cursor and ordinary text paste still works',
+      (tester) async {
+        String? clipboardText;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+              if (call.method == 'Clipboard.setData') {
+                clipboardText = (call.arguments as Map)['text'] as String?;
+                return null;
+              }
+              if (call.method == 'Clipboard.getData') {
+                return clipboardText == null ? null : {'text': clipboardText};
+              }
+              if (call.method == 'Clipboard.hasStrings') {
+                return {'value': clipboardText != null};
+              }
               return null;
-            }
-            if (call.method == 'Clipboard.getData') {
-              return clipboardText == null ? null : {'text': clipboardText};
-            }
-            if (call.method == 'Clipboard.hasStrings') {
-              return {'value': clipboardText != null};
-            }
-            return null;
-          });
-      addTearDown(
-        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-            .setMockMethodCallHandler(SystemChannels.platform, null),
-      );
-      final scrapController = controller(
-        picker: () async => vaultDirectory.path,
-      );
+            });
+        addTearDown(
+          () => TestDefaultBinaryMessengerBinding
+              .instance
+              .defaultBinaryMessenger
+              .setMockMethodCallHandler(SystemChannels.platform, null),
+        );
+        final scrapController = controller(
+          picker: () async => vaultDirectory.path,
+        );
 
-      await tester.runAsync(scrapController.chooseVault);
+        await tester.runAsync(scrapController.chooseVault);
 
-      final session = EditorSessionController()..newDocument();
-      var reads = 0;
-      String? clipboardImage = '${sandbox.path}/clipboard image.png';
-      await pumpApp(
-        tester,
-        scrapController: scrapController,
-        editorSession: session,
-        readClipboard: () async {
-          reads++;
-          return clipboardImage;
-        },
-      );
-      await tester.enterText(
-        find.byKey(const ValueKey('scrap-editor')),
-        'BeforeAfter',
-      );
-      tester
-          .widget<EditableText>(find.byType(EditableText))
-          .controller
-          .selection = const TextSelection.collapsed(
-        offset: 6,
-      );
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
-      await tester.pumpAndSettle();
+        final session = EditorSessionController()..newDocument();
+        var reads = 0;
+        String? clipboardImage = '${sandbox.path}/clipboard image.png';
+        await tester.runAsync(
+          () => File(clipboardImage!).writeAsBytes(
+            base64Decode(
+              'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNomLDgPwAF9AKw7aBF7QAAAABJRU5ErkJggg==',
+            ),
+          ),
+        );
+        await pumpApp(
+          tester,
+          scrapController: scrapController,
+          editorSession: session,
+          readClipboard: () async {
+            reads++;
+            return clipboardImage;
+          },
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('scrap-editor')),
+          'BeforeAfter',
+        );
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .controller
+            .selection = const TextSelection.collapsed(
+          offset: 6,
+        );
+        await tester.sendKeyDownEvent(modifier);
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+        await tester.sendKeyUpEvent(modifier);
+        await tester.pumpAndSettle();
 
-      expect(reads, 1);
-      final focusedEditor = tester
-          .widgetList<EditableText>(find.byType(EditableText))
-          .singleWhere((field) => field.focusNode.hasFocus);
-      expect(focusedEditor.controller.text, 'After');
-      expect(focusedEditor.controller.selection.extentOffset, 0);
-      expect(
-        session.activeDocument!.body,
-        startsWith('Before\n![clipboard image.png]'),
-      );
-      expect(session.activeDocument!.body, endsWith('\nAfter'));
-      expect(session.activeDocument!.pendingImagePaths, hasLength(1));
-      expect(find.byType(Image), findsOneWidget);
-      clipboardImage = null;
+        expect(reads, 1);
+        final focusedEditor = tester
+            .widgetList<EditableText>(find.byType(EditableText))
+            .singleWhere((field) => field.focusNode.hasFocus);
+        expect(focusedEditor.controller.text, 'After');
+        expect(focusedEditor.controller.selection.extentOffset, 0);
+        expect(
+          session.activeDocument!.body,
+          startsWith('Before\n![clipboard image.png]'),
+        );
+        expect(session.activeDocument!.body, endsWith('\nAfter'));
+        expect(session.activeDocument!.pendingImagePaths, hasLength(1));
+        expect(find.byType(Image), findsOneWidget);
+        for (var i = 0; i < 10; i++) {
+          await tester.runAsync(
+            () async => Future<void>.delayed(const Duration(milliseconds: 15)),
+          );
+          await tester.pump();
+        }
+        expect(tester.widget<RawImage>(find.byType(RawImage)).image?.width, 1);
+        expect(find.text('Image unavailable'), findsNothing);
+        clipboardImage = null;
 
-      await Clipboard.setData(const ClipboardData(text: 'Pasted text'));
+        await Clipboard.setData(const ClipboardData(text: 'Pasted text'));
 
-      await tester.tap(find.byType(EditableText).last);
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
-      await tester.pumpAndSettle();
-      expect(session.activeDocument!.body, contains('Pasted text'));
-      expect(session.activeDocument!.pendingImagePaths, hasLength(1));
-    },
-  );
-
+        await tester.tap(find.byType(EditableText).last);
+        await tester.sendKeyDownEvent(modifier);
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+        await tester.sendKeyUpEvent(modifier);
+        await tester.pumpAndSettle();
+        expect(session.activeDocument!.body, contains('Pasted text'));
+        expect(session.activeDocument!.pendingImagePaths, hasLength(1));
+      },
+    );
+  }
   testWidgets(
     'dropping an image inserts at the pointer position in the document',
     (tester) async {

@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:forui/forui.dart';
 
 import '../../core/design/scrapnote_tokens.dart';
+import '../../core/layout/adaptive_workspace.dart';
 import '../../domain/scrap.dart';
 import '../editor/inline_document_editor.dart';
 import '../editor/inline_image.dart';
@@ -72,7 +73,7 @@ class ScrapsView extends StatefulWidget {
   final List<String> savedImagePaths;
   final VoidCallback? onChooseImages;
   final ValueChanged<List<String>>? onImagesDropped;
-  final VoidCallback? onPasteImage;
+  final Future<bool> Function()? onPasteImage;
   final ValueChanged<String>? onRemoveImage;
 
   @override
@@ -128,48 +129,43 @@ class _ScrapsViewState extends State<ScrapsView> {
         child: Focus(
           autofocus: true,
           onKeyEvent: _handlePasteShortcut,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final showHierarchy = constraints.maxWidth >= 700;
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  if (showHierarchy) ...<Widget>[
-                    SizedBox(
-                      width: ScrapnoteTokens.explorerWidth,
-                      child: _InboxHierarchy(
-                        scraps: scraps,
-                        onDeleteScrap: widget.onDeleteScrap,
-                        selectedScrapId: widget.activeScrapId,
-                        onNewDocument: widget.onNewDocument,
-                        onScrapSelected: widget.onScrapSelected,
-                      ),
-                    ),
-                    const _Hairline(axis: Axis.vertical),
-                  ],
-                  Expanded(
-                    child: _DocumentWorkspace(
-                      imageDirectory: widget.imageDirectory,
-                      tabs: widget.tabs,
-                      activeTabId: widget.activeTabId,
-                      controller: widget.controller,
-                      editorScrollController: _editorScrollController,
-                      saving: widget.saving,
-                      pendingImagePaths: widget.pendingImagePaths,
-                      savedImagePaths: widget.savedImagePaths,
-                      onNewDocument: widget.onNewDocument,
-                      onOpenMetadata: () =>
-                          _scaffoldKey.currentState?.openEndDrawer(),
-                      onChooseImages: widget.onChooseImages,
-                      onTabSelected: widget.onTabSelected,
-                      onTabClosed: widget.onTabClosed,
-                      onImagesDropped: widget.onImagesDropped,
-                      onRemoveImage: widget.onRemoveImage,
-                    ),
-                  ),
-                ],
-              );
-            },
+          child: AdaptiveWorkspace(
+            selection: widget.activeTabId,
+            saving: widget.saving,
+            onSave: widget.onSave,
+            onCreate: widget.onNewDocument,
+            onChooseImages: widget.onChooseImages,
+            listBuilder: (showEditor) => _InboxHierarchy(
+              scraps: scraps,
+              onDeleteScrap: widget.onDeleteScrap,
+              selectedScrapId: widget.activeScrapId,
+              onNewDocument: () {
+                widget.onNewDocument();
+                showEditor();
+              },
+              onScrapSelected: (id) {
+                widget.onScrapSelected(id);
+                showEditor();
+              },
+            ),
+            editor: _DocumentWorkspace(
+              imageDirectory: widget.imageDirectory,
+              tabs: widget.tabs,
+              activeTabId: widget.activeTabId,
+              controller: widget.controller,
+              editorScrollController: _editorScrollController,
+              saving: widget.saving,
+              pendingImagePaths: widget.pendingImagePaths,
+              savedImagePaths: widget.savedImagePaths,
+              onNewDocument: widget.onNewDocument,
+              onOpenMetadata: () => _scaffoldKey.currentState?.openEndDrawer(),
+              onChooseImages: widget.onChooseImages,
+              onTabSelected: widget.onTabSelected,
+              onTabClosed: widget.onTabClosed,
+              onImagesDropped: widget.onImagesDropped,
+              onRemoveImage: widget.onRemoveImage,
+              onPasteImage: widget.onPasteImage,
+            ),
           ),
         ),
       ),
@@ -198,9 +194,6 @@ class _ScrapsViewState extends State<ScrapsView> {
         HardwareKeyboard.instance.isShiftPressed) {
       widget.onChooseImages?.call();
       return KeyEventResult.handled;
-    }
-    if (event.logicalKey == LogicalKeyboardKey.keyV) {
-      widget.onPasteImage?.call();
     }
     // EditableText still needs Cmd/Ctrl+V for ordinary text paste.
     return KeyEventResult.ignored;
@@ -418,6 +411,7 @@ class _DocumentWorkspace extends StatelessWidget {
     required this.onTabClosed,
     required this.onImagesDropped,
     required this.onRemoveImage,
+    this.onPasteImage,
   });
 
   final String imageDirectory;
@@ -425,6 +419,7 @@ class _DocumentWorkspace extends StatelessWidget {
   final String? activeTabId;
   final TextEditingController controller;
   final ScrollController editorScrollController;
+  final Future<bool> Function()? onPasteImage;
   final bool saving;
   final List<String> pendingImagePaths;
   final List<String> savedImagePaths;
@@ -464,6 +459,7 @@ class _DocumentWorkspace extends StatelessWidget {
                       imageDirectory: imageDirectory,
                       enabled: !saving,
                       onRemoveImage: onRemoveImage,
+                      onPasteImage: onPasteImage,
                       editorKey: const ValueKey<String>('scrap-editor'),
                     ),
                   ),
@@ -734,9 +730,9 @@ class _EditorDropSurfaceState extends State<_EditorDropSurface> {
 }
 
 class _Hairline extends StatelessWidget {
-  const _Hairline({this.axis = Axis.horizontal});
+  const _Hairline();
 
-  final Axis axis;
+  final Axis axis = Axis.horizontal;
 
   @override
   Widget build(BuildContext context) {

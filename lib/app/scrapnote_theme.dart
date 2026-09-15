@@ -29,6 +29,14 @@ abstract final class ScrapnoteTheme {
   );
 
   static final FThemeData foruiTheme = _createForuiTheme();
+  static final FThemeData foruiTouchTheme = _createForuiTheme(touch: true);
+  static FThemeData forContext(BuildContext context) {
+    final platform = Theme.of(context).platform;
+    return platform == TargetPlatform.android || platform == TargetPlatform.iOS
+        ? foruiTouchTheme
+        : foruiTheme;
+  }
+
   static final ThemeData materialTheme = _createMaterialTheme();
 
   /// Shared document text styling, separate from compact form inputs.
@@ -52,10 +60,10 @@ abstract final class ScrapnoteTheme {
         ),
       );
 
-  static FThemeData _createForuiTheme() {
+  static FThemeData _createForuiTheme({bool touch = false}) {
     final body = FTypeface.inherit(
       colors: colors,
-      touch: false,
+      touch: touch,
       fontFamily: '.AppleSystemUIFont',
       fontFamilyFallback: const <String>[
         'Segoe UI',
@@ -74,7 +82,7 @@ abstract final class ScrapnoteTheme {
     final inheritedStyle = FStyle.inherit(
       colors: colors,
       typography: typography,
-      touch: false,
+      touch: touch,
     );
     const tight = BorderRadius.all(
       Radius.circular(ScrapnoteTokens.radiusTight),
@@ -96,7 +104,7 @@ abstract final class ScrapnoteTheme {
         color: ScrapnoteTokens.charcoal,
         size: 18,
       ),
-      sizes: inheritedStyle.sizes,
+      sizes: inheritedStyle.sizes.copyWith(calendar: 40),
       tappableStyle: inheritedStyle.tappableStyle,
       borderRadius: const FBorderRadius(
         xs2: tight,
@@ -118,7 +126,7 @@ abstract final class ScrapnoteTheme {
       colors: colors,
       typography: typography,
       style: style,
-      touch: false,
+      touch: touch,
     );
   }
 
