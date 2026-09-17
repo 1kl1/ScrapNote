@@ -1,5 +1,7 @@
-// Hallmark · component: metadata drawer · genre: modern-minimal
+// Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V4
 // design-system: DESIGN.md · designed-as-app · Index-First editor shell
+
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -11,15 +13,26 @@ import '../../core/design/scrapnote_tokens.dart';
 import '../../domain/scrap.dart';
 
 class ScrapMetadataDrawer extends StatelessWidget {
-  const ScrapMetadataDrawer({required this.scrap, super.key});
+  const ScrapMetadataDrawer({
+    required this.scrap,
+    this.locationSaving = false,
+    this.onRetryLocation,
+    this.onSetManualLocation,
+    this.onOpenLocationSettings,
+    super.key,
+  });
 
   final Scrap? scrap;
+  final bool locationSaving;
+  final VoidCallback? onRetryLocation;
+  final ValueChanged<ScrapLocation>? onSetManualLocation;
+  final VoidCallback? onOpenLocationSettings;
 
   @override
   Widget build(BuildContext context) {
     final current = scrap;
     return Drawer(
-      width: 360,
+      width: math.min(360, MediaQuery.sizeOf(context).width),
       backgroundColor: ScrapnoteTokens.paperRaised,
       elevation: 0,
       shape: const Border(left: BorderSide(color: ScrapnoteTokens.rule)),
@@ -96,16 +109,41 @@ class ScrapMetadataDrawer extends StatelessWidget {
                           ),
                           _MetadataRow(
                             label: 'ACCURACY',
-                            value:
-                                '±${location.accuracyMeters.toStringAsFixed(0)} m',
+                            value: location.source == 'manual'
+                                ? '수동 지정'
+                                : '±${location.accuracyMeters.toStringAsFixed(0)} m',
                           ),
-                          _MetadataRow(label: 'SOURCE', value: location.source),
+                          _MetadataRow(
+                            label: 'SOURCE',
+                            value: location.source == 'manual'
+                                ? 'Manual'
+                                : location.source,
+                          ),
                           _MetadataRow(
                             label: 'CAPTURED',
                             value: _date(location.capturedAt),
                           ),
-                        ] else
+                          const SizedBox(height: ScrapnoteTokens.space2),
+                          _LocationActions(
+                            saving: locationSaving,
+                            onRetry: onRetryLocation,
+                            onManual: onSetManualLocation == null
+                                ? null
+                                : () => _openManualLocation(context, location),
+                            onOpenSettings: onOpenLocationSettings,
+                          ),
+                        ] else ...<Widget>[
                           const _NoLocationState(),
+                          const SizedBox(height: ScrapnoteTokens.space4),
+                          _LocationActions(
+                            saving: locationSaving,
+                            onRetry: onRetryLocation,
+                            onManual: onSetManualLocation == null
+                                ? null
+                                : () => _openManualLocation(context, null),
+                            onOpenSettings: onOpenLocationSettings,
+                          ),
+                        ],
                       ],
                     ),
             ),
@@ -126,6 +164,25 @@ class ScrapMetadataDrawer extends StatelessWidget {
     final absolute = minutes.abs();
     return 'UTC$sign${(absolute ~/ 60).toString().padLeft(2, '0')}:'
         '${(absolute % 60).toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _openManualLocation(
+    BuildContext context,
+    ScrapLocation? initial,
+  ) async {
+    final location = await showFDialog<ScrapLocation>(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      useSafeArea: true,
+      builder: (context, style, animation) => FDialog(
+        animation: animation,
+        semanticsLabel: '수동 위치 지정',
+        constraints: const BoxConstraints(minWidth: 280, maxWidth: 440),
+        builder: (context, style) => _ManualLocationForm(initial: initial),
+      ),
+    );
+    if (location != null) onSetManualLocation?.call(location);
   }
 }
 
@@ -232,12 +289,200 @@ class _NoLocationState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Text(
-      'No location was recorded. Location Services may be unavailable or permission may have been declined.',
-      style: TextStyle(
-        color: ScrapnoteTokens.mutedInk,
-        fontSize: 13,
-        height: 1.5,
+    return const Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Padding(
+          padding: EdgeInsets.only(top: 2),
+          child: Icon(
+            FLucideIcons.locateOff,
+            size: 18,
+            color: ScrapnoteTokens.signalOrange,
+          ),
+        ),
+        SizedBox(width: ScrapnoteTokens.space2),
+        Expanded(
+          child: Text(
+            '위치가 저장되지 않았습니다. 기기 위치를 다시 요청하거나 위도와 경도를 직접 입력할 수 있습니다.',
+            style: TextStyle(
+              color: ScrapnoteTokens.charcoalSoft,
+              fontSize: 13,
+              height: 1.5,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LocationActions extends StatelessWidget {
+  const _LocationActions({
+    required this.saving,
+    required this.onRetry,
+    required this.onManual,
+    required this.onOpenSettings,
+  });
+
+  final bool saving;
+  final VoidCallback? onRetry;
+  final VoidCallback? onManual;
+  final VoidCallback? onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        FButton(
+          onPress: saving ? null : onRetry,
+          prefix: const Icon(FLucideIcons.locateFixed),
+          child: Text(saving ? '위치 저장 중…' : '현재 위치 다시 기록'),
+        ),
+        const SizedBox(height: ScrapnoteTokens.space2),
+        FButton(
+          variant: FButtonVariant.outline,
+          onPress: saving ? null : onManual,
+          prefix: const Icon(FLucideIcons.mapPinPen),
+          child: const Text('수동 위치 지정'),
+        ),
+        const SizedBox(height: ScrapnoteTokens.space2),
+        FButton(
+          variant: FButtonVariant.ghost,
+          onPress: saving ? null : onOpenSettings,
+          prefix: const Icon(FLucideIcons.settings),
+          child: const Text('앱 설정에서 위치 허용'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ManualLocationForm extends StatefulWidget {
+  const _ManualLocationForm({required this.initial});
+
+  final ScrapLocation? initial;
+
+  @override
+  State<_ManualLocationForm> createState() => _ManualLocationFormState();
+}
+
+class _ManualLocationFormState extends State<_ManualLocationForm> {
+  late final TextEditingController _latitude;
+  late final TextEditingController _longitude;
+  String? _latitudeError;
+  String? _longitudeError;
+
+  @override
+  void initState() {
+    super.initState();
+    _latitude = TextEditingController(
+      text: widget.initial?.latitude.toStringAsFixed(6) ?? '',
+    );
+    _longitude = TextEditingController(
+      text: widget.initial?.longitude.toStringAsFixed(6) ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _latitude.dispose();
+    _longitude.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final latitude = double.tryParse(_latitude.text.trim());
+    final longitude = double.tryParse(_longitude.text.trim());
+    final latitudeValid =
+        latitude != null &&
+        latitude.isFinite &&
+        latitude >= -90 &&
+        latitude <= 90;
+    final longitudeValid =
+        longitude != null &&
+        longitude.isFinite &&
+        longitude >= -180 &&
+        longitude <= 180;
+    setState(() {
+      _latitudeError = latitudeValid ? null : '−90에서 90 사이의 위도를 입력해 주세요.';
+      _longitudeError = longitudeValid ? null : '−180에서 180 사이의 경도를 입력해 주세요.';
+    });
+    if (!latitudeValid || !longitudeValid) return;
+    Navigator.of(context).pop(
+      ScrapLocation(
+        latitude: latitude,
+        longitude: longitude,
+        accuracyMeters: 0,
+        source: 'manual',
+        capturedAt: DateTime.now().toUtc(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(ScrapnoteTokens.space5),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const Text(
+            '수동 위치 지정',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: ScrapnoteTokens.space2),
+          const Text(
+            '지도 앱에서 복사한 위도와 경도를 입력하세요. 위치 출처는 “Manual”로 기록됩니다.',
+            style: TextStyle(
+              color: ScrapnoteTokens.mutedInk,
+              fontSize: 13,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: ScrapnoteTokens.space4),
+          FTextField(
+            label: const Text('위도'),
+            hint: '37.566500',
+            control: FTextFieldControl.managed(controller: _latitude),
+            keyboardType: const TextInputType.numberWithOptions(
+              decimal: true,
+              signed: true,
+            ),
+            textInputAction: TextInputAction.next,
+            error: _latitudeError == null ? null : Text(_latitudeError!),
+          ),
+          const SizedBox(height: ScrapnoteTokens.space3),
+          FTextField(
+            label: const Text('경도'),
+            hint: '126.978000',
+            control: FTextFieldControl.managed(controller: _longitude),
+            keyboardType: const TextInputType.numberWithOptions(
+              decimal: true,
+              signed: true,
+            ),
+            textInputAction: TextInputAction.done,
+            onSubmit: (_) => _save(),
+            error: _longitudeError == null ? null : Text(_longitudeError!),
+          ),
+          const SizedBox(height: ScrapnoteTokens.space5),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: FButton(
+                  variant: FButtonVariant.ghost,
+                  onPress: () => Navigator.of(context).pop(),
+                  child: const Text('취소'),
+                ),
+              ),
+              const SizedBox(width: ScrapnoteTokens.space2),
+              Expanded(
+                child: FButton(onPress: _save, child: const Text('위치 저장')),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

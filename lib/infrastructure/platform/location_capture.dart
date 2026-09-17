@@ -6,12 +6,40 @@ import 'package:geolocator/geolocator.dart';
 import '../../domain/scrap.dart';
 
 typedef ScrapLocationProvider = Future<ScrapLocation?> Function();
+typedef LocationPermissionSettingsOpener = Future<bool> Function();
+
+Future<bool> openSystemLocationPermissionSettings() async {
+  try {
+    return await Geolocator.openAppSettings();
+  } on MissingPluginException {
+    return false;
+  } on PlatformException {
+    return false;
+  }
+}
 
 /// Captures one foreground position when a new Scrap is first saved.
 class LocationCapture {
   const LocationCapture();
 
-  Future<ScrapLocation?> capture() async {
+  static Future<ScrapLocation?>? _captureInFlight;
+
+  Future<ScrapLocation?> capture() {
+    final captureInFlight = _captureInFlight;
+    if (captureInFlight != null) {
+      return captureInFlight;
+    }
+
+    final capture = _captureOnce();
+    _captureInFlight = capture;
+    return capture.whenComplete(() {
+      if (identical(_captureInFlight, capture)) {
+        _captureInFlight = null;
+      }
+    });
+  }
+
+  Future<ScrapLocation?> _captureOnce() async {
     try {
       if (!await Geolocator.isLocationServiceEnabled()) {
         return null;
@@ -40,6 +68,8 @@ class LocationCapture {
     } on MissingPluginException {
       return null;
     } on PlatformException {
+      return null;
+    } on PermissionRequestInProgressException {
       return null;
     } on LocationServiceDisabledException {
       return null;

@@ -69,6 +69,33 @@ void main() {
     expect(controller.activeDocument?.displayName, 'Draft');
   });
 
+  test('location metadata refresh preserves an unsaved body edit', () {
+    final original = _scrap('one', 'Saved body');
+    controller.openScrap(original);
+    controller.updateActiveBody('Unsaved edit');
+    final location = ScrapLocation(
+      latitude: 37.5665,
+      longitude: 126.978,
+      accuracyMeters: 8,
+      source: 'manual',
+      capturedAt: DateTime.utc(2026, 9, 15),
+    );
+    final updated = Scrap(
+      id: original.id,
+      body: original.body,
+      createdAt: original.createdAt,
+      updatedAt: DateTime.utc(2026, 9, 15),
+      location: location,
+    );
+
+    controller.refreshScrapMetadata(updated);
+
+    expect(controller.activeDocument?.body, 'Unsaved edit');
+    expect(controller.activeDocument?.savedBody, 'Saved body');
+    expect(controller.activeDocument?.dirty, isTrue);
+    expect(controller.activeDocument?.scrap?.location, location);
+  });
+
   test('dirty close is refused until the caller confirms discard', () {
     final dirty = controller.newDocument();
     controller.updateActiveBody('Do not lose me');

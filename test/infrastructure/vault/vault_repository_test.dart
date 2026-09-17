@@ -241,6 +241,37 @@ void main() {
     );
   });
 
+  test(
+    'updateScrapLocation replaces only persisted location metadata',
+    () async {
+      final times = <DateTime>[
+        DateTime.utc(2026, 9, 15, 8),
+        DateTime.utc(2026, 9, 15, 9),
+      ];
+      final repository = VaultRepository(
+        temporaryDirectory,
+        idGenerator: () => 'located',
+        now: () => times.removeAt(0),
+      );
+      final original = await repository.createScrap('Keep this body');
+      final location = ScrapLocation(
+        latitude: 37.5665,
+        longitude: 126.978,
+        accuracyMeters: 0,
+        source: 'manual',
+        capturedAt: DateTime.utc(2026, 9, 15, 8, 30),
+      );
+
+      final updated = await repository.updateScrapLocation(original, location);
+
+      expect(updated.body, original.body);
+      expect(updated.createdAt, original.createdAt);
+      expect(updated.location, location);
+      expect(updated.updatedAt, DateTime.utc(2026, 9, 15, 9));
+      expect((await repository.listScraps()).single, updated);
+    },
+  );
+
   test('missing attachments fail without creating a scrap file', () async {
     final repository = VaultRepository(
       temporaryDirectory,

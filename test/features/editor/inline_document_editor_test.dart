@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:forui/forui.dart';
@@ -7,6 +11,139 @@ import 'package:scrapnote/features/editor/inline_document_editor.dart';
 import 'package:scrapnote/features/editor/inline_image.dart';
 
 void main() {
+  for (final key in [LogicalKeyboardKey.backspace, LogicalKeyboardKey.delete]) {
+    testWidgets('${key.keyLabel} removes blank lines between images', (
+      tester,
+    ) async {
+      const first = '![First](file:///tmp/first-missing.png)';
+      const second = '![Second](file:///tmp/second-missing.png)';
+      final controller = TextEditingController(text: '$first\n\n\n$second')
+        ..selection = TextSelection.collapsed(offset: first.length + 1);
+      addTearDown(controller.dispose);
+      final removed = <String>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: FTheme(
+            data: ScrapnoteTheme.foruiTheme,
+            child: Scaffold(
+              body: InlineDocumentEditor(
+                controller: controller,
+                imageDirectory: '/tmp',
+                onRemoveImage: removed.add,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final gap = tester.widget<EditableText>(find.byType(EditableText).first);
+      expect(gap.controller.text, '\n');
+      gap.controller.selection = TextSelection.collapsed(
+        offset: key == LogicalKeyboardKey.backspace ? 1 : 0,
+      );
+      gap.focusNode.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(key);
+      await tester.pumpAndSettle();
+      expect(controller.text, '$first\n\n$second');
+      await tester.sendKeyEvent(key);
+      await tester.pumpAndSettle();
+      expect(controller.text, '$first\n$second');
+      expect(find.byType(Image), findsNWidgets(2));
+      expect(removed, isEmpty);
+      expect(find.byType(EditableText), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('image-heavy documents keep their height and wheel offset stable', (
+    tester,
+  ) async {
+    final directory = (await tester.runAsync(() async {
+      final root = await Directory.systemTemp.createTemp('inline-scroll-');
+      final png = base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNomLDgPwAF9AKw7aBF7QAAAABJRU5ErkJggg==',
+      );
+      for (var i = 0; i < 12; i++) {
+        await File('${root.path}/image-$i.png').writeAsBytes(png);
+      }
+      return root;
+    }))!;
+    addTearDown(() => directory.delete(recursive: true));
+    final controller = TextEditingController(
+      text: [
+        for (var i = 0; i < 12; i++) ...[
+          List.generate(
+            i % 4 + 1,
+            (line) => 'Paragraph $i line $line',
+          ).join('\n'),
+          '![Image $i](image-$i.png "center:${[100, 20, 50, 33][i % 4]}")',
+        ],
+        'Document end',
+      ].join('\n'),
+    )..selection = const TextSelection.collapsed(offset: 0);
+    final scroll = ScrollController();
+    addTearDown(controller.dispose);
+    addTearDown(scroll.dispose);
+    // Decode fixtures before mounting the editor: this isolates lazy extent
+    // corrections from unrelated asynchronous file/decode scheduling.
+    await tester.pumpWidget(const MaterialApp(home: Scaffold()));
+    await tester.runAsync(() async {
+      final context = tester.element(find.byType(Scaffold));
+      await Future.wait([
+        for (var i = 0; i < 12; i++)
+          precacheImage(
+            FileImage(File('${directory.path}/image-$i.png')),
+            context,
+          ),
+      ]);
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FTheme(
+          data: ScrapnoteTheme.foruiTheme,
+          child: Scaffold(
+            body: InlineDocumentEditor(
+              controller: controller,
+              scrollController: scroll,
+              imageDirectory: directory.path,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    FocusManager.instance.primaryFocus?.unfocus();
+    scroll.jumpTo(0);
+    await tester.pumpAndSettle();
+
+    final extent = scroll.position.maxScrollExtent;
+    expect(extent, greaterThan(2000));
+    final document = find.byKey(const ValueKey('inline-document-scroll'));
+    final pointer = tester.getTopLeft(document) + const Offset(10, 100);
+    for (var tick = 1; tick <= 30; tick++) {
+      await tester.sendEventToBinding(
+        PointerScrollEvent(position: pointer, scrollDelta: const Offset(0, 60)),
+      );
+      await tester.pump();
+      expect(scroll.offset, closeTo(tick * 60, 0.01));
+      expect(scroll.position.maxScrollExtent, closeTo(extent, 0.01));
+    }
+    // Crossing all image boundaries in either direction does not change the
+    // document extent or trigger a sliver scroll-offset correction.
+    for (final offset in [extent - 10, extent / 2, 120.0, 0.0]) {
+      scroll.jumpTo(offset);
+      await tester.pumpAndSettle();
+      expect(scroll.offset, closeTo(offset, 0.01));
+      expect(scroll.position.maxScrollExtent, closeTo(extent, 0.01));
+    }
+    // Even below the fold, blocks remain mounted with their measured heights.
+    expect(find.byType(Image), findsNWidgets(12));
+    expect(find.byType(EditableText), findsNWidgets(13));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('Backspace joins lines after an image is removed', (
     tester,
   ) async {

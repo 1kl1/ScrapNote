@@ -140,7 +140,7 @@ class VaultSyncEngine {
           await directory.delete();
         }
       }
-      await _writeState(merged);
+      await _writeState(merged, syncedAt: DateTime.now().toUtc());
     } finally {
       _running = false;
     }
@@ -170,12 +170,19 @@ class VaultSyncEngine {
     ).entries;
   }
 
-  Future<void> _writeState(Map<String, String> entries) async {
+  Future<void> _writeState(
+    Map<String, String> entries, {
+    DateTime? syncedAt,
+  }) async {
     final temporary = File(
       '${_state.path}.${DateTime.now().microsecondsSinceEpoch}.tmp',
     );
     await temporary.writeAsString(
-      jsonEncode({'identity': remote.identity, 'entries': entries}),
+      jsonEncode({
+        'identity': remote.identity,
+        'entries': entries,
+        'synced_at': syncedAt?.toIso8601String(),
+      }),
       flush: true,
     );
     await temporary.rename(_state.path);

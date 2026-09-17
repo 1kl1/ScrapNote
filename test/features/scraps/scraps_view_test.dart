@@ -30,6 +30,9 @@ void main() {
     Future<bool> Function()? onPaste,
     VoidCallback? onCloseActive,
     ValueChanged<String>? onDelete,
+    VoidCallback? onRetryLocation,
+    ValueChanged<ScrapLocation>? onSetManualLocation,
+    VoidCallback? onOpenLocationSettings,
   }) async {
     tester.view.physicalSize = const Size(1100, 760);
     tester.view.devicePixelRatio = 1;
@@ -53,6 +56,7 @@ void main() {
               tabs: const <ScrapEditorTabData>[tab],
               activeTabId: tab.id,
               activeScrapId: scraps.isEmpty ? null : scraps.first.id,
+              activeScrap: scraps.isEmpty ? null : scraps.first,
               controller: controller,
               pendingImagePaths: images,
               onSave: onSave ?? () {},
@@ -65,6 +69,9 @@ void main() {
               onImagesDropped: onDropped,
               onPasteImage: onPaste,
               onChooseImages: () {},
+              onRetryLocation: onRetryLocation,
+              onSetManualLocation: onSetManualLocation,
+              onOpenLocationSettings: onOpenLocationSettings,
             ),
           ),
         ),
@@ -231,5 +238,66 @@ void main() {
 
     await tester.tap(find.text('Recently edited'));
     expect(selected, recentlyEdited.id);
+  });
+
+  testWidgets('shows missing location and offers device retry', (tester) async {
+    var retries = 0;
+    var settingsOpens = 0;
+    final scrap = Scrap(
+      id: 'without-location',
+      body: 'No location yet',
+      createdAt: DateTime.utc(2026, 9, 15),
+      updatedAt: DateTime.utc(2026, 9, 15),
+    );
+    await pumpView(
+      tester,
+      scraps: <Scrap>[scrap],
+      onRetryLocation: () => retries += 1,
+      onSetManualLocation: (_) {},
+      onOpenLocationSettings: () => settingsOpens += 1,
+    );
+
+    expect(find.textContaining('위치 저장 안 됨'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey<String>('scrap-metadata')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('위치가 저장되지 않았습니다'), findsOneWidget);
+    await tester.tap(find.text('현재 위치 다시 기록'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(retries, 1);
+    await tester.tap(find.text('앱 설정에서 위치 허용'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(settingsOpens, 1);
+  });
+
+  testWidgets('accepts manually entered coordinates from metadata', (
+    tester,
+  ) async {
+    ScrapLocation? selectedLocation;
+    final scrap = Scrap(
+      id: 'manual-location',
+      body: 'Manual location',
+      createdAt: DateTime.utc(2026, 9, 15),
+      updatedAt: DateTime.utc(2026, 9, 15),
+    );
+    await pumpView(
+      tester,
+      scraps: <Scrap>[scrap],
+      onRetryLocation: () {},
+      onSetManualLocation: (location) => selectedLocation = location,
+    );
+    await tester.tap(find.byKey(const ValueKey<String>('scrap-metadata')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('수동 위치 지정'));
+    await tester.pumpAndSettle();
+    final fields = find.byType(EditableText);
+    await tester.enterText(fields.at(fields.evaluate().length - 2), '37.5665');
+    await tester.enterText(fields.last, '126.978');
+    await tester.tap(find.text('위치 저장'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(selectedLocation?.latitude, 37.5665);
+    expect(selectedLocation?.longitude, 126.978);
+    expect(selectedLocation?.source, 'manual');
   });
 }

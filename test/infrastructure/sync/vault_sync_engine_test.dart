@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -79,6 +80,10 @@ void main() {
     expect(await b.scan(), await a.scan());
     expect(remote.manifest.entries, hasLength(7));
     expect(await File(p.join(phone.path, '.trash/a.md')).exists(), isFalse);
+    final state = jsonDecode(
+      await File(p.join(desktop.path, '.sync', 'state.json')).readAsString(),
+    );
+    expect(DateTime.tryParse(state['synced_at'] as String), isNotNull);
   });
 
   test('two devices merge independent edits and propagate deletion', () async {

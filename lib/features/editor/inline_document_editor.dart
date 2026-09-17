@@ -20,6 +20,7 @@ class InlineDocumentEditor extends StatefulWidget {
     this.onRemoveImage,
     this.onAddImage,
     this.onPasteImage,
+    this.scrollController,
     this.editorKey,
     super.key,
   });
@@ -29,6 +30,7 @@ class InlineDocumentEditor extends StatefulWidget {
   final ValueChanged<String>? onRemoveImage;
   final ValueChanged<String>? onAddImage;
   final Future<bool> Function()? onPasteImage;
+  final ScrollController? scrollController;
 
   final Key? editorKey;
   @override
@@ -50,6 +52,23 @@ class _Block {
   void dispose() {
     controller.dispose();
     focus.dispose();
+  }
+}
+
+/// Retain Flutter's normal text deletion except for an empty object separator,
+/// which belongs to the document rather than to the individual text field.
+class _DeleteObjectGapAction extends ContextAction<DeleteCharacterIntent> {
+  _DeleteObjectGapAction(this.removeGap);
+
+  final bool Function() removeGap;
+
+  @override
+  Object? invoke(DeleteCharacterIntent intent, [BuildContext? context]) {
+    if (removeGap()) return null;
+    final action = callingAction;
+    return action is ContextAction<DeleteCharacterIntent>
+        ? action.invoke(intent, context)
+        : action?.invoke(intent);
   }
 }
 
@@ -211,6 +230,27 @@ class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
     _releaseRemovedImages(removedContent);
   }
 
+  bool _deleteEmptyObjectGap(_Block block) {
+    if (!widget.enabled || !block.focus.hasFocus) return false;
+    final value = block.controller.value;
+    if (value.text.isNotEmpty ||
+        !value.selection.isValid ||
+        !value.selection.isCollapsed ||
+        !value.composing.isCollapsed) {
+      return false;
+    }
+    final index = _blocks.indexOf(block);
+    if (index <= 0 || index >= _blocks.length - 1) return false;
+    if (_blocks[index - 1].kind == _Kind.text ||
+        _blocks[index + 1].kind == _Kind.text) {
+      return false;
+    }
+    // An empty field still contributes a blank line when blocks are joined.
+    // Delete that separator, not either neighboring image/Scrap.
+    _remove(block);
+    return true;
+  }
+
   void _releaseRemovedImages(String oldContent) {
     for (final match in InlineImage.pattern.allMatches(oldContent)) {
       final source = Uri.tryParse(match.group(2)!);
@@ -290,57 +330,77 @@ class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
   );
 
   Widget _buildLines() {
-    return ListView(
+    // This is one editable document, not a list of independent records. Lazy
+    // slivers estimate unseen image heights and can correct the scroll offset
+    // by an entire image when those blocks enter/leave the viewport. Keep all
+    // blocks mounted and measure the complete document instead.
+    return SingleChildScrollView(
+      key: const ValueKey('inline-document-scroll'),
+      controller: widget.scrollController,
       padding: const EdgeInsets.only(top: 14, bottom: 80),
-      children: [
-        for (final block in _blocks)
-          Builder(
-            key: block.key,
-            builder: (context) {
-              // Line positions are computed from preceding blocks, independent of
-              // lazy layout/build order.
-              final line =
-                  1 +
-                  _blocks
-                      .takeWhile((b) => b != block)
-                      .fold<int>(0, (n, b) => n + b.lines);
-              if (block.kind == _Kind.text) {
-                final key =
-                    block == _blocks.firstWhere((b) => b.kind == _Kind.text)
-                    ? widget.editorKey
-                    : null;
-                return NumberedTextArea(
-                  controller: block.controller,
-                  focusNode: block.focus,
-                  firstLine: line,
-                  enabled: widget.enabled,
-                  editorKey: key,
-                );
-              }
-              return IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      width: 58,
-                      alignment: Alignment.topRight,
-                      padding: const EdgeInsets.only(top: 11, right: 14),
-                      decoration: const BoxDecoration(
-                        border: Border(
-                          right: BorderSide(color: ScrapnoteTokens.rule),
-                        ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final block in _blocks)
+            Builder(
+              key: block.key,
+              builder: (context) {
+                // Line positions are computed from preceding logical blocks.
+                final line =
+                    1 +
+                    _blocks
+                        .takeWhile((b) => b != block)
+                        .fold<int>(0, (n, b) => n + b.lines);
+                if (block.kind == _Kind.text) {
+                  final key =
+                      block == _blocks.firstWhere((b) => b.kind == _Kind.text)
+                      ? widget.editorKey
+                      : null;
+                  return Actions(
+                    actions: {
+                      DeleteCharacterIntent: _DeleteObjectGapAction(
+                        () => _deleteEmptyObjectGap(block),
                       ),
-                      child: Text(
-                        '$line',
-                        key: ValueKey('line-number-$line'),
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontFamily: 'monospace',
-                          color: ScrapnoteTokens.mutedInk,
+                    },
+                    child: NumberedTextArea(
+                      controller: block.controller,
+                      focusNode: block.focus,
+                      firstLine: line,
+                      enabled: widget.enabled,
+                      editorKey: key,
+                    ),
+                  );
+                }
+                // The gutter follows the measured object height without an
+                // expensive intrinsic-size pass through the image and controls.
+                return Stack(
+                  children: [
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      width: 58,
+                      child: Container(
+                        alignment: Alignment.topRight,
+                        padding: const EdgeInsets.only(top: 11, right: 14),
+                        decoration: const BoxDecoration(
+                          border: Border(
+                            right: BorderSide(color: ScrapnoteTokens.rule),
+                          ),
+                        ),
+                        child: Text(
+                          '$line',
+                          key: ValueKey('line-number-$line'),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontFamily: 'monospace',
+                            color: ScrapnoteTokens.mutedInk,
+                          ),
                         ),
                       ),
                     ),
-                    Expanded(
+                    Padding(
+                      padding: const EdgeInsets.only(left: 58),
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(24, 8, 32, 8),
                         child: block.kind == _Kind.image
@@ -349,11 +409,11 @@ class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
                       ),
                     ),
                   ],
-                ),
-              );
-            },
-          ),
-      ],
+                );
+              },
+            ),
+        ],
+      ),
     );
   }
 

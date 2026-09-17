@@ -47,6 +47,20 @@ class EditorSessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Refreshes persisted metadata while preserving any unsaved body edits.
+  void refreshScrapMetadata(Scrap saved) {
+    var changed = false;
+    _documents = [
+      for (final document in _documents)
+        if (document.scrap?.id == saved.id)
+          document.copyWith(scrap: saved, replaceScrap: true)
+        else
+          document,
+    ];
+    changed = _documents.any((document) => document.scrap == saved);
+    if (changed) notifyListeners();
+  }
+
   EditorDocument newDocument() {
     final document = EditorDocument(
       sessionId: _newSessionId(),

@@ -51,6 +51,9 @@ class ScrapsView extends StatefulWidget {
     this.onImagesDropped,
     this.onPasteImage,
     this.onRemoveImage,
+    this.onRetryLocation,
+    this.onSetManualLocation,
+    this.onOpenLocationSettings,
     super.key,
   });
 
@@ -75,6 +78,9 @@ class ScrapsView extends StatefulWidget {
   final ValueChanged<List<String>>? onImagesDropped;
   final Future<bool> Function()? onPasteImage;
   final ValueChanged<String>? onRemoveImage;
+  final VoidCallback? onRetryLocation;
+  final ValueChanged<ScrapLocation>? onSetManualLocation;
+  final VoidCallback? onOpenLocationSettings;
 
   @override
   State<ScrapsView> createState() => _ScrapsViewState();
@@ -98,7 +104,13 @@ class _ScrapsViewState extends State<ScrapsView> {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: ScrapnoteTokens.paper,
-      endDrawer: ScrapMetadataDrawer(scrap: widget.activeScrap),
+      endDrawer: ScrapMetadataDrawer(
+        scrap: widget.activeScrap,
+        locationSaving: widget.saving,
+        onRetryLocation: widget.onRetryLocation,
+        onSetManualLocation: widget.onSetManualLocation,
+        onOpenLocationSettings: widget.onOpenLocationSettings,
+      ),
       body: CallbackShortcuts(
         bindings: <ShortcutActivator, VoidCallback>{
           const SingleActivator(LogicalKeyboardKey.keyS, meta: true):
@@ -157,6 +169,7 @@ class _ScrapsViewState extends State<ScrapsView> {
               saving: widget.saving,
               pendingImagePaths: widget.pendingImagePaths,
               savedImagePaths: widget.savedImagePaths,
+              activeScrap: widget.activeScrap,
               onNewDocument: widget.onNewDocument,
               onOpenMetadata: () => _scaffoldKey.currentState?.openEndDrawer(),
               onChooseImages: widget.onChooseImages,
@@ -404,6 +417,7 @@ class _DocumentWorkspace extends StatelessWidget {
     required this.saving,
     required this.pendingImagePaths,
     required this.savedImagePaths,
+    required this.activeScrap,
     required this.onNewDocument,
     required this.onOpenMetadata,
     required this.onChooseImages,
@@ -423,6 +437,7 @@ class _DocumentWorkspace extends StatelessWidget {
   final bool saving;
   final List<String> pendingImagePaths;
   final List<String> savedImagePaths;
+  final Scrap? activeScrap;
   final VoidCallback onNewDocument;
   final VoidCallback onOpenMetadata;
   final VoidCallback? onChooseImages;
@@ -445,6 +460,8 @@ class _DocumentWorkspace extends StatelessWidget {
             onChooseImages: onChooseImages,
             onSelected: onTabSelected,
             onClosed: onTabClosed,
+            locationMissing:
+                activeScrap != null && activeScrap!.location == null,
           ),
           const _Hairline(),
           Expanded(
@@ -456,6 +473,7 @@ class _DocumentWorkspace extends StatelessWidget {
                     child: InlineDocumentEditor(
                       key: ValueKey(activeTabId),
                       controller: controller,
+                      scrollController: editorScrollController,
                       imageDirectory: imageDirectory,
                       enabled: !saving,
                       onRemoveImage: onRemoveImage,
@@ -464,6 +482,8 @@ class _DocumentWorkspace extends StatelessWidget {
                     ),
                   ),
           ),
+          if (activeScrap != null && activeScrap!.location == null)
+            const _MissingLocationLine(),
           if (saving) const LinearProgressIndicator(minHeight: 2),
         ],
       ),
@@ -479,6 +499,7 @@ class _TabStrip extends StatelessWidget {
     required this.onChooseImages,
     required this.onSelected,
     required this.onClosed,
+    required this.locationMissing,
   });
 
   final List<ScrapEditorTabData> tabs;
@@ -487,6 +508,7 @@ class _TabStrip extends StatelessWidget {
   final VoidCallback? onChooseImages;
   final ValueChanged<String> onSelected;
   final ValueChanged<String> onClosed;
+  final bool locationMissing;
 
   @override
   Widget build(BuildContext context) {
@@ -514,11 +536,56 @@ class _TabStrip extends StatelessWidget {
             ),
             _EditorIconButton(
               key: const ValueKey<String>('scrap-metadata'),
-              icon: FLucideIcons.mapPin,
-              label: 'Scrap information and location',
+              icon: locationMissing
+                  ? FLucideIcons.mapPinOff
+                  : FLucideIcons.mapPin,
+              label: locationMissing
+                  ? '위치가 저장되지 않음. Scrap 정보 열기'
+                  : 'Scrap information and location',
               onPressed: onOpenMetadata,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MissingLocationLine extends StatelessWidget {
+  const _MissingLocationLine();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      height: ScrapnoteTokens.statusLineHeight,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: ScrapnoteTokens.paperSunken,
+          border: Border(top: BorderSide(color: ScrapnoteTokens.rule)),
+        ),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: ScrapnoteTokens.space3),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                FLucideIcons.locateOff,
+                size: 13,
+                color: ScrapnoteTokens.signalOrange,
+              ),
+              SizedBox(width: ScrapnoteTokens.space2),
+              Expanded(
+                child: Text(
+                  '위치 저장 안 됨 · 상단 위치 버튼에서 다시 기록하거나 직접 지정할 수 있습니다.',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: ScrapnoteTokens.charcoalSoft,
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

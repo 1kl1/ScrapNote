@@ -1,14 +1,19 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'dart:convert';
 import 'package:flutter/gestures.dart';
 import 'package:scrapnote/features/notes/note_controller.dart';
+import 'package:scrapnote/features/expenses/expense_controller.dart';
 import 'package:scrapnote/features/editor/inline_image.dart';
 import 'package:scrapnote/infrastructure/vault/note_repository.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:forui/forui.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:scrapnote/app/scrapnote_app.dart';
 import 'package:scrapnote/app/scrapnote_shell.dart';
 import 'package:scrapnote/domain/scrap.dart';
@@ -16,7 +21,11 @@ import 'package:scrapnote/features/editor/editor_session_controller.dart';
 import 'package:scrapnote/features/scraps/scrap_controller.dart';
 import 'package:scrapnote/infrastructure/drafts/editor_recovery_store.dart';
 import 'package:scrapnote/infrastructure/platform/window_close_guard.dart';
+import 'package:scrapnote/infrastructure/sync/sync_vault_summary.dart';
+import 'package:scrapnote/infrastructure/sync/vault_synchronizer.dart';
 import 'package:scrapnote/infrastructure/vault/vault_repository.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:yet_another_json_isolate/yet_another_json_isolate.dart';
 
 void main() {
   late Directory sandbox;
@@ -58,9 +67,13 @@ void main() {
     EditorSessionController? editorSession,
     WindowCloseGuard? closeGuard,
     NoteController? notes,
+    ExpenseController? expenses,
     ClipboardImageReader? readClipboard,
+    SupabaseClient? syncClient,
+    VaultSynchronizer vaultSynchronizer = synchronizeVault,
+    Size size = const Size(1200, 720),
   }) async {
-    tester.view.physicalSize = const Size(1200, 720);
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -71,7 +84,11 @@ void main() {
     await tester.pumpWidget(
       ScrapnoteApp(
         controller: scrapController,
+        syncClient: syncClient,
+        syncSummaryLoader: (_) async => SyncVaultSummary.empty,
+        vaultSynchronizer: vaultSynchronizer,
         noteController: notes,
+        expenseController: expenses,
         clipboardImageReader: readClipboard,
         editorSessionController: editorSession,
         recoveryStore: recoveryStore(),
@@ -395,6 +412,164 @@ void main() {
     expect(find.byKey(const ValueKey<String>('scrap-editor')), findsOneWidget);
   });
 
+  testWidgets('places persistent sync status below the workspace', (
+    tester,
+  ) async {
+    final scrapController = controller(picker: () async => vaultDirectory.path);
+    await tester.runAsync(scrapController.chooseVault);
+    final client = SupabaseClient(
+      'https://example.supabase.co',
+      'public-test-key',
+      isolate: _InlineJson(),
+      authOptions: const AuthClientOptions(autoRefreshToken: false),
+    );
+    addTearDown(client.dispose);
+
+    await pumpApp(tester, scrapController: scrapController, syncClient: client);
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final status = find.byKey(const ValueKey<String>('sync-status-line'));
+    expect(status, findsOneWidget);
+    expect(
+      tester.getTopLeft(status).dy,
+      greaterThan(tester.getCenter(find.byKey(ScrapnoteShell.bodyKey)).dy),
+    );
+    final button = find.byKey(const ValueKey<String>('manual-sync-button'));
+    expect(tester.getCenter(button).dx, greaterThan(1000));
+    expect(tester.getBottomRight(button).dy, lessThanOrEqualTo(720));
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(find.text('계정 및 동기화'), findsOneWidget);
+    expect(find.text('로그인'), findsOneWidget);
+  });
+
+  testWidgets('syncs only on click and saves drafts before syncing', (
+    tester,
+  ) async {
+    final scrapController = controller(picker: () async => vaultDirectory.path);
+    await tester.runAsync(scrapController.chooseVault);
+    await tester.runAsync(() async {
+      final state = File('${vaultDirectory.path}/.sync/state.json');
+      await state.parent.create(recursive: true);
+      await state.writeAsString('{}');
+    });
+    final client = SupabaseClient(
+      'https://example.supabase.co',
+      'public-test-key',
+      isolate: _InlineJson(),
+      authOptions: const AuthClientOptions(autoRefreshToken: false),
+      httpClient: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'access_token': 'fixture-access',
+            'refresh_token': 'fixture-refresh',
+            'token_type': 'bearer',
+            'expires_in': 3600,
+            'user': {
+              'id': 'test-user',
+              'aud': 'authenticated',
+              'email': 'person@example.com',
+              'created_at': '2026-09-15T00:00:00Z',
+              'app_metadata': <String, dynamic>{},
+              'user_metadata': <String, dynamic>{},
+            },
+          }),
+          200,
+        ),
+      ),
+    );
+    addTearDown(client.dispose);
+    await tester.runAsync(
+      () => client.auth.signInWithPassword(
+        email: 'person@example.com',
+        password: 'fixture-password',
+      ),
+    );
+    final session = EditorSessionController();
+    final notes = _SyncTestNoteController();
+    final expenses = _SyncTestExpenseController();
+    addTearDown(notes.dispose);
+    addTearDown(expenses.dispose);
+    final syncing = Completer<void>();
+    var syncs = 0;
+    await pumpApp(
+      tester,
+      scrapController: scrapController,
+      editorSession: session,
+      notes: notes,
+      expenses: expenses,
+      syncClient: client,
+      vaultSynchronizer: (vaultPath, suppliedClient, resolutions) {
+        expect(vaultPath, vaultDirectory.path);
+        expect(suppliedClient, same(client));
+        expect(session.hasDirtyDocuments, isFalse);
+        expect(scrapController.scraps.single.body, 'manual draft');
+        syncs += 1;
+        return syncing.future;
+      },
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey<String>('scrap-editor')),
+      'saved locally',
+    );
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const ValueKey<String>('scrap-editor')),
+      'manual draft',
+    );
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump(const Duration(seconds: 65));
+    expect(syncs, 0);
+    expect(session.hasDirtyDocuments, isTrue);
+
+    final button = find.byKey(const ValueKey<String>('manual-sync-button'));
+    await tester.tap(button);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(syncs, 1);
+    expect(tester.widget<FButton>(button).onPress, isNull);
+    await tester.pump(const Duration(seconds: 65));
+    expect(syncs, 1);
+
+    await tester.runAsync(() async {
+      syncing.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pump();
+    expect(find.textContaining('동기화 완료'), findsOneWidget);
+    expect(tester.widget<FButton>(button).onPress, isNotNull);
+  });
+
+  for (final width in [320.0, 375.0, 414.0, 768.0]) {
+    testWidgets('bottom-right sync button fits width $width', (tester) async {
+      final scrapController = controller(
+        picker: () async => vaultDirectory.path,
+      );
+      await tester.runAsync(scrapController.chooseVault);
+      final client = SupabaseClient(
+        'https://example.supabase.co',
+        'public-test-key',
+        isolate: _InlineJson(),
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+      addTearDown(client.dispose);
+      await pumpApp(
+        tester,
+        scrapController: scrapController,
+        syncClient: client,
+        size: Size(width, 800),
+      );
+      final button = find.byKey(const ValueKey<String>('manual-sync-button'));
+      expect(tester.getBottomRight(button).dx, lessThanOrEqualTo(width));
+      expect(tester.getCenter(button).dx, greaterThan(width / 2));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('marks edits dirty and saves the active document with Cmd+S', (
     tester,
   ) async {
@@ -536,6 +711,37 @@ void main() {
     await tester.pump(const Duration(milliseconds: 20));
     expect(await closeResult, isFalse);
   });
+}
+
+class _InlineJson extends YAJsonIsolate {
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<void> dispose() async {}
+
+  @override
+  Future<dynamic> decode(String value) async => jsonDecode(value);
+
+  @override
+  Future<String> encode(Object? value) async => jsonEncode(value);
+}
+
+// This test exercises sync triggers, not unrelated repository filesystem I/O.
+class _SyncTestNoteController extends NoteController {
+  @override
+  Future<void> connect(String vaultPath) async {}
+
+  @override
+  Future<void> reloadAfterSync() async {}
+}
+
+class _SyncTestExpenseController extends ExpenseController {
+  @override
+  Future<void> connect(String vaultPath) async {}
+
+  @override
+  Future<void> reloadAfterSync() async {}
 }
 
 class _TestWindowCloseGuard extends WindowCloseGuard {

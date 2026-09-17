@@ -5,10 +5,9 @@ import 'dart:async';
 import 'dart:io';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../features/sync/sync_account_page.dart';
-import '../infrastructure/sync/sync_bootstrap.dart';
 import '../infrastructure/sync/sync_manifest.dart';
-import '../infrastructure/sync/supabase_sync_remote.dart';
-import '../infrastructure/sync/vault_sync_engine.dart';
+import '../infrastructure/sync/vault_synchronizer.dart';
+import '../infrastructure/sync/sync_vault_summary.dart';
 import '../features/expenses/expense_controller.dart';
 import '../features/expenses/expenses_view.dart';
 
@@ -52,6 +51,8 @@ class ScrapnoteApp extends StatelessWidget {
     this.windowCloseGuard,
     this.imagePathPicker,
     this.clipboardImageReader,
+    this.syncSummaryLoader = loadSyncVaultSummary,
+    this.vaultSynchronizer = synchronizeVault,
     this.initializeController = true,
     this.installWindowCloseGuard = true,
   });
@@ -65,6 +66,8 @@ class ScrapnoteApp extends StatelessWidget {
   final WindowCloseGuard? windowCloseGuard;
   final ImagePathPicker? imagePathPicker;
   final ClipboardImageReader? clipboardImageReader;
+  final SyncVaultSummaryLoader syncSummaryLoader;
+  final VaultSynchronizer vaultSynchronizer;
   final bool initializeController;
   final bool installWindowCloseGuard;
 
@@ -86,6 +89,8 @@ class ScrapnoteApp extends StatelessWidget {
         windowCloseGuard: windowCloseGuard,
         imagePathPicker: imagePathPicker,
         clipboardImageReader: clipboardImageReader,
+        syncSummaryLoader: syncSummaryLoader,
+        vaultSynchronizer: vaultSynchronizer,
         initializeController: initializeController,
         installWindowCloseGuard: installWindowCloseGuard,
       ),
@@ -105,6 +110,8 @@ class ScrapnoteWorkspace extends StatefulWidget {
     this.windowCloseGuard,
     this.imagePathPicker,
     this.clipboardImageReader,
+    this.syncSummaryLoader = loadSyncVaultSummary,
+    this.vaultSynchronizer = synchronizeVault,
     this.initializeController = true,
     this.installWindowCloseGuard = true,
   });
@@ -118,6 +125,8 @@ class ScrapnoteWorkspace extends StatefulWidget {
   final WindowCloseGuard? windowCloseGuard;
   final ImagePathPicker? imagePathPicker;
   final ClipboardImageReader? clipboardImageReader;
+  final SyncVaultSummaryLoader syncSummaryLoader;
+  final VaultSynchronizer vaultSynchronizer;
   final bool initializeController;
   final bool installWindowCloseGuard;
 
@@ -160,10 +169,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
   ScrapnoteSection _section = ScrapnoteSection.scraps;
   late DateTime _selectedDate;
   Timer? _recoveryTimer;
-  Timer? _syncTimer;
-  Timer? _syncRetry;
   bool _syncInFlight = false;
-  bool _foreground = true;
   String _syncStatus = '아직 동기화하지 않았습니다.';
   String? _boundSessionId;
   String? _boundNoteSessionId;
@@ -209,15 +215,6 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
     _noteController.addListener(_handleNoteControllerChanged);
     FocusManager.instance.addEarlyKeyEventHandler(_handleGlobalKeyEvent);
 
-    _controller.addListener(_scheduleSync);
-    _noteController.addListener(_scheduleSync);
-    _expenseController.addListener(_scheduleSync);
-    if (widget.syncClient != null) {
-      _syncRetry = Timer.periodic(
-        const Duration(seconds: 60),
-        (_) => _scheduleSync(),
-      );
-    }
     final today = DateTime.now();
     _selectedDate = DateTime(today.year, today.month, today.day);
     if (widget.initializeController) {
@@ -226,6 +223,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
       unawaited(_prepareEditorSession());
       unawaited(_noteController.connect(_controller.vaultPath!));
       unawaited(_expenseController.connect(_controller.vaultPath!));
+      unawaited(_restoreSyncStatus());
     }
     if (widget.installWindowCloseGuard) {
       unawaited(_startWindowCloseGuard());
@@ -242,11 +240,6 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _syncTimer?.cancel();
-    _syncRetry?.cancel();
-    _controller.removeListener(_scheduleSync);
-    _noteController.removeListener(_scheduleSync);
-    _expenseController.removeListener(_scheduleSync);
     if (widget.expenseController == null) _expenseController.dispose();
     _recoveryTimer?.cancel();
     unawaited(_persistRecovery());
@@ -312,26 +305,6 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
           body: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              if (_syncInFlight) const LinearProgressIndicator(minHeight: 2),
-              if (widget.syncClient != null && !_syncInFlight)
-                GestureDetector(
-                  onTap: () => unawaited(_openSync()),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 4,
-                    ),
-                    child: Text(
-                      _syncStatus,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: ScrapnoteTokens.mutedInk,
-                      ),
-                    ),
-                  ),
-                ),
               if (_controller.loading)
                 const LinearProgressIndicator(
                   minHeight: 2,
@@ -351,6 +324,14 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
                         ),
                 ),
               ),
+              if (widget.syncClient != null)
+                _SyncStatusLine(
+                  status: _syncInFlight ? '동기화 중…' : _syncStatus,
+                  syncing: _syncInFlight,
+                  onSync: !_controller.hasVault || _controller.loading
+                      ? null
+                      : () => unawaited(_requestSync()),
+                ),
             ],
           ),
         );
@@ -360,27 +341,29 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _foreground = state == AppLifecycleState.resumed;
-    if (_foreground) {
-      _scheduleSync();
-    } else {
+    if (state != AppLifecycleState.resumed) {
       unawaited(_persistRecovery());
     }
   }
 
-  void _scheduleSync() {
-    if (!mounted || widget.syncClient == null || _syncInFlight) return;
-    _syncTimer?.cancel();
-    _syncTimer = Timer(const Duration(seconds: 2), () {
-      if (_foreground && ModalRoute.of(context)?.isCurrent != false) {
-        unawaited(_performSync());
-      }
-    });
+  Future<void> _requestSync() async {
+    if (_syncInFlight) return;
+    if (widget.syncClient?.auth.currentUser == null) {
+      await _openSync();
+      return;
+    }
+    try {
+      final status = await _performSync();
+      if (mounted) setState(() => _syncStatus = status);
+    } on SyncConflicts {
+      if (mounted) await _openSync();
+    }
   }
 
   Future<void> _openSync() async {
     if (_syncInFlight) return;
     final client = widget.syncClient;
+    final vaultPath = _controller.vaultPath;
     if (client == null) {
       setState(
         () => _localError =
@@ -388,24 +371,46 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
       );
       return;
     }
+    if (vaultPath == null) {
+      setState(() => _localError = '동기화할 로컬 Vault 폴더를 먼저 선택해 주세요.');
+      return;
+    }
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => SyncAccountPage(
           client: client,
           status: _syncStatus,
-          onSync: (resolutions) =>
-              _performSync(manual: true, resolutions: resolutions),
+          vaultPath: vaultPath,
+          summaryLoader: widget.syncSummaryLoader,
+          onSync: (resolutions) => _performSync(resolutions: resolutions),
         ),
       ),
     );
     if (mounted && client.auth.currentUser == null) {
       setState(() => _syncStatus = '기기에 저장됨 · 로그인하면 다른 기기와 연결할 수 있습니다.');
     }
-    _scheduleSync();
+  }
+
+  Future<void> _restoreSyncStatus() async {
+    final vaultPath = _controller.vaultPath;
+    if (widget.syncClient == null || vaultPath == null) return;
+    try {
+      final summary = await widget.syncSummaryLoader(vaultPath);
+      if (!mounted) return;
+      final signedIn = widget.syncClient!.auth.currentUser != null;
+      setState(() {
+        _syncStatus = !signedIn
+            ? '기기에 저장됨 · 로그인하면 다른 기기와 연결할 수 있습니다.'
+            : summary.lastSyncedAt == null
+            ? '로그인됨 · 아직 이 Vault를 동기화하지 않았습니다.'
+            : '마지막 동기화 · ${_formatSyncTime(summary.lastSyncedAt!.toLocal())}';
+      });
+    } on FileSystemException {
+      // The account page will surface detailed Vault read errors if opened.
+    }
   }
 
   Future<String> _performSync({
-    bool manual = false,
     Map<String, SyncResolution> resolutions = const {},
   }) async {
     final client = widget.syncClient;
@@ -424,45 +429,31 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
         _expenseController.loading) {
       return '저장소와 로그인 상태를 확인한 뒤 다시 시도해 주세요.';
     }
-    // First upload is explicitly initiated in the account page.
-    if (!manual &&
-        !await File(path.join(vaultPath, '.sync', 'state.json')).exists()) {
-      return _syncStatus;
-    }
     if (!mounted || _syncInFlight) return _syncStatus;
-    if (!manual &&
-        (_editorSession.hasDirtyDocuments ||
-            _noteController.hasDirtyDocuments)) {
-      return '편집 내용을 저장하면 동기화합니다.';
-    }
-    setState(() => _syncInFlight = true);
+    setState(() {
+      _syncInFlight = true;
+      _syncStatus = '동기화 중…';
+    });
     try {
-      if (manual && !await _saveAllDirtyDocuments()) {
+      if (!await _saveAllDirtyDocuments()) {
         return _syncStatus = '저장하지 못한 문서가 있습니다. 내용을 확인한 뒤 다시 시도해 주세요.';
       }
-      final engine = VaultSyncEngine(
-        Directory(vaultPath),
-        SupabaseSyncRemote(client!, SyncBootstrap.url),
-      );
-      await engine.synchronize(resolutions: resolutions);
+      await widget.vaultSynchronizer(vaultPath, client!, resolutions);
       if (!mounted) return _syncStatus;
       await _controller.reload();
       _editorSession.refreshSavedDocuments(_controller.scraps);
       await _noteController.reloadAfterSync();
       await _expenseController.reloadAfterSync();
-      final now = TimeOfDay.now();
-      _syncStatus =
-          '동기화 완료 · ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+      _syncStatus = '동기화 완료 · ${_formatSyncTime(DateTime.now())}';
       return _syncStatus;
     } on SyncConflicts {
       _syncStatus = '동기화 충돌 · 계정 및 동기화에서 사용할 내용을 선택해 주세요.';
-      if (manual) rethrow;
-      return _syncStatus;
+      rethrow;
     } on FormatException catch (error) {
       _syncStatus = error.message;
       return _syncStatus;
     } on Exception {
-      _syncStatus = '동기화하지 못했습니다 · 기기에는 저장됨. 연결 후 다시 시도합니다.';
+      _syncStatus = '동기화하지 못했습니다 · 기기에는 저장됨. 연결 후 동기화 버튼을 다시 눌러 주세요.';
       return _syncStatus;
     } finally {
       if (mounted) setState(() => _syncInFlight = false);
@@ -505,6 +496,15 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
         onImagesDropped: _addImagePaths,
         onPasteImage: _pasteImage,
         onRemoveImage: _removeImage,
+        onRetryLocation: active?.scrap == null
+            ? null
+            : () => unawaited(_retryActiveScrapLocation()),
+        onSetManualLocation: active?.scrap == null
+            ? null
+            : (location) => unawaited(_setActiveScrapLocation(location)),
+        onOpenLocationSettings: active?.scrap == null
+            ? null
+            : () => unawaited(_controller.openLocationPermissionSettings()),
       ),
       ScrapnoteSection.notes => NotesWorkspace(
         scraps: _controller.scraps
@@ -549,7 +549,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
     await _noteController.connect(_controller.vaultPath!);
     await _expenseController.connect(_controller.vaultPath!);
     await _restoreNotesRecovery();
-    _scheduleSync();
+    await _restoreSyncStatus();
   }
 
   Future<void> _prepareEditorSession() async {
@@ -872,7 +872,25 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
       await _prepareEditorSession();
     }
     await _restoreNotesRecovery();
-    _scheduleSync();
+    await _restoreSyncStatus();
+  }
+
+  Future<void> _retryActiveScrapLocation() async {
+    final scrap = _editorSession.activeDocument?.scrap;
+    if (scrap == null) return;
+    final updated = await _controller.captureLocationForScrap(scrap);
+    if (updated != null && mounted) {
+      _editorSession.refreshScrapMetadata(updated);
+    }
+  }
+
+  Future<void> _setActiveScrapLocation(ScrapLocation location) async {
+    final scrap = _editorSession.activeDocument?.scrap;
+    if (scrap == null) return;
+    final updated = await _controller.setLocationForScrap(scrap, location);
+    if (updated != null && mounted) {
+      _editorSession.refreshScrapMetadata(updated);
+    }
   }
 
   Future<void> _chooseImages() async {
@@ -1299,6 +1317,12 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
       await file.delete();
     }
   }
+
+  static String _formatSyncTime(DateTime value) {
+    String two(int component) => component.toString().padLeft(2, '0');
+    return '${value.year}-${two(value.month)}-${two(value.day)} '
+        '${two(value.hour)}:${two(value.minute)}';
+  }
 }
 
 enum _UnsavedChoice { save, discard, cancel }
@@ -1346,6 +1370,88 @@ class _ErrorStrip extends StatelessWidget {
             child: const Icon(FLucideIcons.x, size: 14),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SyncStatusLine extends StatelessWidget {
+  const _SyncStatusLine({
+    required this.status,
+    required this.syncing,
+    required this.onSync,
+  });
+
+  final String status;
+  final bool syncing;
+  final VoidCallback? onSync;
+
+  bool get _failed => status.contains('못했습니다') || status.contains('충돌');
+  bool get _complete => status.contains('완료') || status.contains('마지막 동기화');
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      label: status,
+      child: SizedBox(
+        key: const ValueKey<String>('sync-status-line'),
+        height: ScrapnoteTokens.minimumHitTarget,
+        child: DecoratedBox(
+          decoration: const BoxDecoration(
+            color: ScrapnoteTokens.paperRaised,
+            border: Border(top: BorderSide(color: ScrapnoteTokens.rule)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: ScrapnoteTokens.space3,
+            ),
+            child: Row(
+              children: <Widget>[
+                if (syncing)
+                  const SizedBox.square(
+                    dimension: 12,
+                    child: CircularProgressIndicator(strokeWidth: 1.5),
+                  )
+                else
+                  Icon(
+                    _failed
+                        ? FLucideIcons.cloudAlert
+                        : _complete
+                        ? FLucideIcons.cloudCheck
+                        : FLucideIcons.cloud,
+                    size: 13,
+                    color: _failed
+                        ? ScrapnoteTokens.destructive
+                        : _complete
+                        ? ScrapnoteTokens.success
+                        : ScrapnoteTokens.mutedInk,
+                  ),
+                const SizedBox(width: ScrapnoteTokens.space2),
+                Expanded(
+                  child: Text(
+                    status,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: ScrapnoteTokens.mutedInk,
+                      fontSize: 11,
+                      fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: ScrapnoteTokens.space2),
+                FButton(
+                  key: const ValueKey<String>('manual-sync-button'),
+                  variant: FButtonVariant.ghost,
+                  onPress: syncing ? null : onSync,
+                  prefix: const Icon(FLucideIcons.refreshCw, size: 14),
+                  child: Text(syncing ? '동기화 중…' : '동기화', maxLines: 1),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

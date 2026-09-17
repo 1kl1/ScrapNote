@@ -98,6 +98,9 @@ dates, and file-like labels use the platform monospace. Body text is at least
   render inside the editing surface while their portable relative Markdown
   links remain the saved source of truth. Pending attachments use a compact
   editor status line rather than toolbar chrome.
+- Image-bearing editors scroll as one fully measured document. Blocks remain
+  mounted across viewport boundaries, so estimated lazy-list heights cannot
+  change the scroll extent or move the reader by an image-sized step.
 
 ## States and feedback
 
@@ -119,7 +122,11 @@ The Inbox hierarchy is modified-first. Selecting a scrap opens or focuses its
 tab. The editor is always the largest surface. Markdown is edited directly; a
 separate Preview mode is intentionally absent. The right-side metadata control
 opens an edge drawer with capture and modification metadata, GPS coordinates,
-and a map when a saved location is available.
+and a map when a saved location is available. A saved Scrap without coordinates
+shows a compact editor status line and a distinct unavailable-location icon. The
+drawer offers retrying the device location, opening the app's system permission
+settings, or entering latitude and longitude manually. Manual coordinates are
+labelled as manual rather than claiming device accuracy.
 
 ### Notes
 
@@ -140,10 +147,17 @@ communicated by color alone.
 ## Personal sync
 
 The cloud action opens account and sync settings on every screen size. The first
-upload is started explicitly with “Save and sync”. Subsequent saved changes and
-app resumes trigger sync while the app is in the foreground; offline failures retry
-every minute. Unsaved edits defer background sync. A compact status states whether
-files are synchronized, remain local, or require conflict resolution.
+upload and every subsequent sync are started explicitly by the user. Saving,
+app resumes, and elapsed time never trigger sync or retry it. The bottom-right
+sync button saves open drafts before synchronizing; signed-out users are directed
+to the account page. A compact status states whether
+files are synchronized, remain local, or require conflict resolution. This status
+occupies a 44 px line at the bottom of the workspace, below the feature surface,
+with the sync action at its right edge.
+When signed in, the account page reports the current session, last successful sync,
+local sync file size, Scrap/Note/attachment/expense counts, and the previous synced
+item count. Logout is always available on the same page and leaves local Vault files
+untouched.
 
 A three-way file merge uses the last common local baseline, with server revision
 checks to prevent concurrent overwrites. Conflicting edits/deletes require a choice

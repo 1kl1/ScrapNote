@@ -190,6 +190,47 @@ class VaultRepository {
     return updated;
   }
 
+  /// Replaces the persisted location without changing the Scrap body or assets.
+  Future<Scrap> updateScrapLocation(
+    Scrap existing,
+    ScrapLocation location,
+  ) async {
+    if (!location.latitude.isFinite ||
+        location.latitude < -90 ||
+        location.latitude > 90 ||
+        !location.longitude.isFinite ||
+        location.longitude < -180 ||
+        location.longitude > 180 ||
+        !location.accuracyMeters.isFinite ||
+        location.accuracyMeters < 0) {
+      throw const FormatException('위도, 경도 또는 정확도 값이 올바르지 않습니다.');
+    }
+
+    await initialize();
+    final record = await _findScrap(existing.id);
+    if (record == null) {
+      throw FileSystemException(
+        'The scrap no longer exists in this Vault.',
+        existing.id,
+      );
+    }
+
+    final persisted = record.scrap;
+    final updated = Scrap(
+      id: persisted.id,
+      body: persisted.body,
+      createdAt: persisted.createdAt,
+      updatedAt: _now().toUtc(),
+      localDate: persisted.localDate,
+      utcOffsetMinutes: persisted.utcOffsetMinutes,
+      timezoneName: persisted.timezoneName,
+      assets: persisted.assets,
+      location: location,
+    );
+    await _atomicWrite(record.file, codec.encode(updated));
+    return updated;
+  }
+
   /// Move only the document to Vault trash. Shared assets remain available to Notes.
   Future<void> deleteScrap(String id) async {
     final record = await _findScrap(id);

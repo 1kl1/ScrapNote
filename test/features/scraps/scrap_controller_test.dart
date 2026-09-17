@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -27,6 +28,7 @@ void main() {
     Future<String?> Function()? picker,
     Future<String?> Function()? restorer,
     ScrapLocationProvider? locationProvider,
+    LocationPermissionSettingsOpener? locationSettingsOpener,
   }) {
     var sequence = 0;
     return ScrapController(
@@ -34,6 +36,7 @@ void main() {
       directoryRestorer: restorer ?? () async => null,
       supportDirectoryProvider: () async => supportDirectory,
       locationProvider: locationProvider ?? () async => null,
+      locationSettingsOpener: locationSettingsOpener ?? () async => true,
       repositoryFactory: (root) => VaultRepository(
         root,
         idGenerator: () => 'scrap-${sequence++}',
@@ -122,6 +125,28 @@ void main() {
     expect(controller.scraps.single.location, location);
   });
 
+  test('ignores a duplicate save while location capture is running', () async {
+    final locationRequest = Completer<ScrapLocation?>();
+    var locationRequests = 0;
+    final controller = buildController(
+      locationProvider: () {
+        locationRequests += 1;
+        return locationRequest.future;
+      },
+    );
+    await controller.initialize();
+    expect(await controller.chooseVault(), isTrue);
+
+    final firstSave = controller.saveDocument('Only once');
+    final duplicateSave = controller.saveDocument('Only once');
+
+    expect(await duplicateSave, isNull);
+    expect(locationRequests, 1);
+    locationRequest.complete(null);
+    expect(await firstSave, isNotNull);
+    expect(controller.scraps, hasLength(1));
+  });
+
   test('saveDocument updates an existing scrap and returns it', () async {
     final controller = buildController();
     await controller.initialize();
@@ -143,6 +168,73 @@ void main() {
           .length,
       1,
     );
+  });
+
+  test('retries missing location for an existing scrap', () async {
+    final captured = ScrapLocation(
+      latitude: 37.5665,
+      longitude: 126.978,
+      accuracyMeters: 9,
+      source: 'device',
+      capturedAt: DateTime.utc(2026, 9, 15),
+    );
+    var attempts = 0;
+    final controller = buildController(
+      locationProvider: () async {
+        attempts += 1;
+        return attempts == 1 ? null : captured;
+      },
+    );
+    await controller.initialize();
+    final original = await controller.saveDocument('Missing location');
+
+    final updated = await controller.captureLocationForScrap(original!);
+
+    expect(updated?.location, captured);
+    expect(controller.scraps.single.location, captured);
+    expect(controller.scraps.single.body, 'Missing location');
+  });
+
+  test('reports a failed location retry without changing the scrap', () async {
+    final controller = buildController(locationProvider: () async => null);
+    await controller.initialize();
+    final original = await controller.saveDocument('Still local');
+
+    expect(await controller.captureLocationForScrap(original!), isNull);
+    expect(controller.errorMessage, contains('수동으로 지정'));
+    expect(controller.scraps.single.location, isNull);
+  });
+
+  test('persists a manually selected location', () async {
+    final controller = buildController();
+    await controller.initialize();
+    final original = await controller.saveDocument('Manual place');
+    final manual = ScrapLocation(
+      latitude: 34.011286,
+      longitude: -116.166868,
+      accuracyMeters: 0,
+      source: 'manual',
+      capturedAt: DateTime.utc(2026, 9, 15),
+    );
+
+    final updated = await controller.setLocationForScrap(original!, manual);
+
+    expect(updated?.location, manual);
+    expect(controller.scraps.single.location, manual);
+  });
+
+  test('opens app settings for a permanently denied location', () async {
+    var opens = 0;
+    final controller = buildController(
+      locationSettingsOpener: () async {
+        opens += 1;
+        return true;
+      },
+    );
+
+    expect(await controller.openLocationPermissionSettings(), isTrue);
+    expect(opens, 1);
+    expect(controller.errorMessage, isNull);
   });
 
   test('does not connect a vault when the picker is cancelled', () async {

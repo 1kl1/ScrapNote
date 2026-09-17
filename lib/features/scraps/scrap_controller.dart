@@ -24,6 +24,7 @@ class ScrapController extends ChangeNotifier {
     SupportDirectoryProvider? supportDirectoryProvider,
     VaultRepositoryFactory? repositoryFactory,
     ScrapLocationProvider? locationProvider,
+    LocationPermissionSettingsOpener? locationSettingsOpener,
   }) : _directoryPicker =
            directoryPicker ?? const VaultAccess().selectDirectory,
        _directoryRestorer =
@@ -31,7 +32,9 @@ class ScrapController extends ChangeNotifier {
        _supportDirectoryProvider =
            supportDirectoryProvider ?? getApplicationSupportDirectory,
        _repositoryFactory = repositoryFactory ?? VaultRepository.new,
-       _locationProvider = locationProvider ?? const LocationCapture().capture;
+       _locationProvider = locationProvider ?? const LocationCapture().capture,
+       _locationSettingsOpener =
+           locationSettingsOpener ?? openSystemLocationPermissionSettings;
 
   static const _settingsFileName = 'settings.json';
 
@@ -40,6 +43,7 @@ class ScrapController extends ChangeNotifier {
   final SupportDirectoryProvider _supportDirectoryProvider;
   final VaultRepositoryFactory _repositoryFactory;
   final ScrapLocationProvider _locationProvider;
+  final LocationPermissionSettingsOpener _locationSettingsOpener;
 
   VaultRepository? _repository;
   List<Scrap> _scraps = const [];
@@ -126,6 +130,10 @@ class ScrapController extends ChangeNotifier {
     Scrap? existing,
     Iterable<String> attachmentPaths = const <String>[],
   }) async {
+    if (_saving) {
+      return null;
+    }
+
     final attachments = attachmentPaths
         .map((attachment) => attachment.trim())
         .where((attachment) => attachment.isNotEmpty)
@@ -190,6 +198,80 @@ class ScrapController extends ChangeNotifier {
       _saving = false;
       notifyListeners();
     }
+  }
+
+  /// Tries device location again for an already-saved Scrap.
+  Future<Scrap?> captureLocationForScrap(Scrap scrap) async {
+    if (_repository == null || _saving) return null;
+    _saving = true;
+    _errorMessage = null;
+    notifyListeners();
+    try {
+      final location = await _locationProvider();
+      if (location == null) {
+        _errorMessage =
+            '위치를 저장하지 못했습니다. 위치 정보에서 앱 설정을 열어 권한을 허용하거나 수동으로 지정해 주세요.';
+        return null;
+      }
+      return await _persistLocation(scrap, location);
+    } on FileSystemException catch (error) {
+      _errorMessage = '위치를 Scrap에 저장하지 못했습니다. ${error.message}';
+      return null;
+    } on FormatException catch (error) {
+      _errorMessage = error.message;
+      return null;
+    } finally {
+      _saving = false;
+      notifyListeners();
+    }
+  }
+
+  /// Persists a manually selected location for an already-saved Scrap.
+  Future<Scrap?> setLocationForScrap(
+    Scrap scrap,
+    ScrapLocation location,
+  ) async {
+    if (_repository == null || _saving) return null;
+    _saving = true;
+    _errorMessage = null;
+    notifyListeners();
+    try {
+      return await _persistLocation(scrap, location);
+    } on FileSystemException catch (error) {
+      _errorMessage = '위치를 Scrap에 저장하지 못했습니다. ${error.message}';
+      return null;
+    } on FormatException catch (error) {
+      _errorMessage = error.message;
+      return null;
+    } finally {
+      _saving = false;
+      notifyListeners();
+    }
+  }
+
+  /// Opens this app's system settings so a permanently denied permission can
+  /// be changed without leaving the recovery flow unexplained.
+  Future<bool> openLocationPermissionSettings() async {
+    _errorMessage = null;
+    notifyListeners();
+    try {
+      final opened = await _locationSettingsOpener();
+      if (!opened) {
+        _errorMessage = '앱 설정을 열지 못했습니다. 시스템 설정에서 Scrapnote의 위치 권한을 허용해 주세요.';
+      }
+      return opened;
+    } on PlatformException {
+      _errorMessage = '앱 설정을 열지 못했습니다. 시스템 설정에서 Scrapnote의 위치 권한을 허용해 주세요.';
+      return false;
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  Future<Scrap> _persistLocation(Scrap scrap, ScrapLocation location) async {
+    final updated = await _repository!.updateScrapLocation(scrap, location);
+    _scraps = _replaceAndSort(_scraps, updated);
+    return updated;
   }
 
   static List<Scrap> _replaceAndSort(List<Scrap> scraps, Scrap replacement) {
