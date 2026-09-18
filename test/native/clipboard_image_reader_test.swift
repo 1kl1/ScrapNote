@@ -1,4 +1,5 @@
 import Cocoa
+import ImageIO
 
 @main
 struct ClipboardImageReaderTest {
@@ -8,8 +9,8 @@ struct ClipboardImageReaderTest {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
-    func png(_ width: Int) -> Data {
-      let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: 2,
+    func png(_ width: Int, _ height: Int = 2) -> Data {
+      let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
       return bitmap.representation(using: .png, properties: [:])!
@@ -41,6 +42,32 @@ struct ClipboardImageReaderTest {
     let normalized = NSBitmapImageRep(data: ClipboardImageReader.pngData(from: board)!)!
     assert(normalized.pixelsWide == 17 && normalized.pixelsHigh == 9)
     assert(normalized.bitsPerSample == 8 && normalized.samplesPerPixel == 4)
+
+    let portrait = png(2, 13)
+    board.clearContents()
+    board.setData(portrait, forType: .png)
+    let pastedPortrait = NSBitmapImageRep(data: ClipboardImageReader.pngData(from: board)!)!
+    assert(pastedPortrait.pixelsWide == 2 && pastedPortrait.pixelsHigh == 13,
+      "Tall images must remain tall; never infer rotation from their dimensions")
+
+    // Camera JPEGs may store landscape pixels with a portrait display tag.
+    // Converting to PNG must preserve the original displayed direction.
+    for orientation in 1...8 {
+      let encoded = NSMutableData()
+      let destination = CGImageDestinationCreateWithData(encoded, "public.jpeg" as CFString, 1, nil)!
+      CGImageDestinationAddImage(destination, NSBitmapImageRep(data: original)!.cgImage!,
+        [kCGImagePropertyOrientation: orientation] as CFDictionary)
+      assert(CGImageDestinationFinalize(destination))
+      let photo = directory.appendingPathComponent("camera-\(orientation).jpg")
+      try (encoded as Data).write(to: photo)
+      board.clearContents()
+      board.writeObjects([photo as NSURL])
+      let pasted = NSBitmapImageRep(data: ClipboardImageReader.pngData(from: board)!)!
+      let swapsAxes = orientation >= 5
+      assert(pasted.pixelsWide == (swapsAxes ? 2 : 13)
+        && pasted.pixelsHigh == (swapsAxes ? 13 : 2),
+        "Clipboard conversion must preserve display orientation \(orientation)")
+    }
     board.clearContents()
     board.setData(Data("not an image".utf8), forType: .png)
     assert(ClipboardImageReader.pngData(from: board) == nil)

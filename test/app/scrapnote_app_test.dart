@@ -435,6 +435,15 @@ void main() {
       greaterThan(tester.getCenter(find.byKey(ScrapnoteShell.bodyKey)).dy),
     );
     final button = find.byKey(const ValueKey<String>('manual-sync-button'));
+    expect(tester.getSize(status).height, 32);
+    expect(tester.getSize(button).width, lessThanOrEqualTo(32));
+    expect(tester.getSize(button).height, lessThanOrEqualTo(32));
+    expect(
+      find.descendant(of: button, matching: find.byType(Text)),
+      findsNothing,
+    );
+    expect(tester.widget<FButton>(button).size, FButtonSizeVariant.xs);
+    expect(tester.widget<FButton>(button).semanticsLabel, '동기화');
     expect(tester.getCenter(button).dx, greaterThan(1000));
     expect(tester.getBottomRight(button).dy, lessThanOrEqualTo(720));
     await tester.tap(button);
@@ -564,6 +573,12 @@ void main() {
         size: Size(width, 800),
       );
       final button = find.byKey(const ValueKey<String>('manual-sync-button'));
+      expect(tester.getSize(button).width, lessThanOrEqualTo(32));
+      expect(tester.getSize(button).height, lessThanOrEqualTo(32));
+      expect(
+        find.descendant(of: button, matching: find.byType(Text)),
+        findsNothing,
+      );
       expect(tester.getBottomRight(button).dx, lessThanOrEqualTo(width));
       expect(tester.getCenter(button).dx, greaterThan(width / 2));
       expect(tester.takeException(), isNull);

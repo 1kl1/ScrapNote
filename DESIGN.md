@@ -44,7 +44,7 @@ in narrow Note editors opens on demand, preserving space for the software keyboa
 - Hierarchy pane: 232 px
 - Tab strip: 38 px
 - Status line: 24 px when needed
-- Interactive hit target: at least 44 × 44 px
+- Interactive hit target: at least 44 × 44 px, except the compact sync status action
 - Rules: 1 px
 - Corners: 2–4 px; dialogs may use 6 px
 - Spacing base: 4 px; common steps are 8, 12, 16, 24, and 32 px
@@ -152,8 +152,9 @@ app resumes, and elapsed time never trigger sync or retry it. The bottom-right
 sync button saves open drafts before synchronizing; signed-out users are directed
 to the account page. A compact status states whether
 files are synchronized, remain local, or require conflict resolution. This status
-occupies a 44 px line at the bottom of the workspace, below the feature surface,
-with the sync action at its right edge.
+occupies a 32 px line at the bottom of the workspace, below the feature surface,
+with an extra-small, icon-only sync action at its right edge. Its label remains
+available through a tooltip and accessibility semantics.
 When signed in, the account page reports the current session, last successful sync,
 local sync file size, Scrap/Note/attachment/expense counts, and the previous synced
 item count. Logout is always available on the same page and leaves local Vault files

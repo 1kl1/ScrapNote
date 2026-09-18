@@ -46,6 +46,7 @@ abstract final class ScrapnoteTokens {
   static const double explorerPaneWidth = 232;
   static const double tabStripHeight = 38;
   static const double statusLineHeight = 24;
+  static const double syncStatusLineHeight = 32;
 
   // Compatibility aliases for feature workbenches that still use the original
   // token names. The rail no longer expands at wider breakpoints.

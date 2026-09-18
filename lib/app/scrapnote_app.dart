@@ -1396,7 +1396,7 @@ class _SyncStatusLine extends StatelessWidget {
       label: status,
       child: SizedBox(
         key: const ValueKey<String>('sync-status-line'),
-        height: ScrapnoteTokens.minimumHitTarget,
+        height: ScrapnoteTokens.syncStatusLineHeight,
         child: DecoratedBox(
           decoration: const BoxDecoration(
             color: ScrapnoteTokens.paperRaised,
@@ -1441,12 +1441,16 @@ class _SyncStatusLine extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: ScrapnoteTokens.space2),
-                FButton(
-                  key: const ValueKey<String>('manual-sync-button'),
-                  variant: FButtonVariant.ghost,
-                  onPress: syncing ? null : onSync,
-                  prefix: const Icon(FLucideIcons.refreshCw, size: 14),
-                  child: Text(syncing ? '동기화 중…' : '동기화', maxLines: 1),
+                Tooltip(
+                  message: syncing ? '동기화 중…' : '동기화',
+                  child: FButton.icon(
+                    key: const ValueKey<String>('manual-sync-button'),
+                    variant: FButtonVariant.ghost,
+                    size: FButtonSizeVariant.xs,
+                    onPress: syncing ? null : onSync,
+                    semanticsLabel: syncing ? '동기화 중…' : '동기화',
+                    child: const Icon(FLucideIcons.refreshCw, size: 14),
+                  ),
                 ),
               ],
             ),
