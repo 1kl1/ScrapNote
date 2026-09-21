@@ -553,6 +553,73 @@ void main() {
     expect(tester.widget<FButton>(button).onPress, isNotNull);
   });
 
+  testWidgets('manual sync shows the specific image size error', (
+    tester,
+  ) async {
+    final scrapController = controller(picker: () async => vaultDirectory.path);
+    await tester.runAsync(scrapController.chooseVault);
+    final client = SupabaseClient(
+      'https://example.supabase.co',
+      'public-test-key',
+      isolate: _InlineJson(),
+      authOptions: const AuthClientOptions(autoRefreshToken: false),
+      httpClient: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'access_token': 'fixture-access',
+            'refresh_token': 'fixture-refresh',
+            'token_type': 'bearer',
+            'expires_in': 3600,
+            'user': {
+              'id': 'test-user',
+              'aud': 'authenticated',
+              'email': 'person@example.com',
+              'created_at': '2026-09-15T00:00:00Z',
+              'app_metadata': <String, dynamic>{},
+              'user_metadata': <String, dynamic>{},
+            },
+          }),
+          200,
+        ),
+      ),
+    );
+    addTearDown(client.dispose);
+    await tester.runAsync(
+      () => client.auth.signInWithPassword(
+        email: 'person@example.com',
+        password: 'fixture-password',
+      ),
+    );
+    final notes = _SyncTestNoteController();
+    final expenses = _SyncTestExpenseController();
+    addTearDown(notes.dispose);
+    addTearDown(expenses.dispose);
+    await pumpApp(
+      tester,
+      scrapController: scrapController,
+      syncClient: client,
+      notes: notes,
+      expenses: expenses,
+      vaultSynchronizer: (_, _, _) async =>
+          throw const FileSystemException('동기화 가능한 파일 크기는 25 MiB 이하입니다.'),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byKey(const ValueKey<String>('manual-sync-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
+    final statusText = tester
+        .widgetList<Text>(
+          find.descendant(
+            of: find.byKey(const ValueKey<String>('sync-status-line')),
+            matching: find.byType(Text),
+          ),
+        )
+        .map((widget) => widget.data)
+        .join('|');
+    expect(statusText, contains('25 MiB 이하'));
+  });
+
   for (final width in [320.0, 375.0, 414.0, 768.0]) {
     testWidgets('bottom-right sync button fits width $width', (tester) async {
       final scrapController = controller(

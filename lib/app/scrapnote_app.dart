@@ -434,16 +434,17 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
       _syncInFlight = true;
       _syncStatus = '동기화 중…';
     });
+    var attemptedSync = false;
+    var reloadedVault = false;
     try {
       if (!await _saveAllDirtyDocuments()) {
         return _syncStatus = '저장하지 못한 문서가 있습니다. 내용을 확인한 뒤 다시 시도해 주세요.';
       }
+      attemptedSync = true;
       await widget.vaultSynchronizer(vaultPath, client!, resolutions);
       if (!mounted) return _syncStatus;
-      await _controller.reload();
-      _editorSession.refreshSavedDocuments(_controller.scraps);
-      await _noteController.reloadAfterSync();
-      await _expenseController.reloadAfterSync();
+      await _reloadVaultAfterSync();
+      reloadedVault = true;
       _syncStatus = '동기화 완료 · ${_formatSyncTime(DateTime.now())}';
       return _syncStatus;
     } on SyncConflicts {
@@ -452,12 +453,31 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
     } on FormatException catch (error) {
       _syncStatus = error.message;
       return _syncStatus;
+    } on FileSystemException catch (error) {
+      _syncStatus = '동기화하지 못했습니다 · ${error.message}';
+      return _syncStatus;
     } on Exception {
       _syncStatus = '동기화하지 못했습니다 · 기기에는 저장됨. 연결 후 동기화 버튼을 다시 눌러 주세요.';
       return _syncStatus;
     } finally {
+      // Compression may have relinked local Markdown even if a later upload,
+      // conflict, or commit fails. Refresh open documents to those saved paths.
+      if (attemptedSync && !reloadedVault && mounted) {
+        try {
+          await _reloadVaultAfterSync();
+        } on Exception {
+          // Keep the original sync failure visible.
+        }
+      }
       if (mounted) setState(() => _syncInFlight = false);
     }
+  }
+
+  Future<void> _reloadVaultAfterSync() async {
+    await _controller.reload();
+    _editorSession.refreshSavedDocuments(_controller.scraps);
+    await _noteController.reloadAfterSync();
+    await _expenseController.reloadAfterSync();
   }
 
   Widget _buildSection() {

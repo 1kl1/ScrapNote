@@ -75,4 +75,22 @@ void main() {
       );
     },
   );
+
+  test(
+    'Note attachment aliases with identical bytes share one stored asset',
+    () async {
+      final alias = File('${vault.path}/same-image.jpg');
+      await alias.writeAsBytes(await image.readAsBytes());
+      final repo = NoteRepository(vault);
+      final note = await repo.createNote(
+        '${InlineImage.markdown(image.path)}\n${InlineImage.markdown(alias.path)}',
+        folder: '',
+        attachmentPaths: [image.path, alias.path],
+      );
+      expect(note.assets, hasLength(1));
+      expect(InlineImage.pattern.allMatches(note.body), hasLength(2));
+      expect(note.body, isNot(contains('file:')));
+      expect(note.body, isNot(contains('.jpg')));
+    },
+  );
 }

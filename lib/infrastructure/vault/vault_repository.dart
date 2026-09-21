@@ -9,6 +9,8 @@ import 'package:scrapnote/domain/scrap.dart';
 import 'package:scrapnote/infrastructure/vault/front_matter_codec.dart';
 import 'package:uuid/uuid.dart';
 
+import 'image_attachment_optimizer.dart';
+
 typedef ScrapIdGenerator = String Function();
 typedef VaultClock = DateTime Function();
 
@@ -19,6 +21,7 @@ class VaultRepository {
     ScrapFileCodec? codec,
     ScrapIdGenerator? idGenerator,
     VaultClock? now,
+    this._imageOptimizer = const ImageAttachmentOptimizer(),
   }) : root = switch (root) {
          Directory directory => directory,
          String path => Directory(path),
@@ -36,6 +39,7 @@ class VaultRepository {
   final ScrapFileCodec codec;
   final ScrapIdGenerator _idGenerator;
   final VaultClock _now;
+  final ImageAttachmentOptimizer _imageOptimizer;
 
   Directory get scrapsDirectory => Directory(p.join(root.path, 'scraps'));
   Directory get assetsDirectory =>
@@ -281,8 +285,10 @@ class VaultRepository {
       );
     }
 
-    final digest = await sha256.bind(source.openRead()).first;
-    final hash = digest.toString();
+    final optimized = await _imageOptimizer.optimize(source);
+    final hash = optimized == null
+        ? (await sha256.bind(source.openRead()).first).toString()
+        : sha256.convert(optimized.bytes).toString();
     final bucket = Directory(
       p.join(assetsDirectory.path, hash.substring(0, 2)),
     );
@@ -291,9 +297,18 @@ class VaultRepository {
     final existing = await _findAssetWithHash(bucket, hash);
     final stored =
         existing ??
-        File(p.join(bucket.path, '$hash${_extension(source.path)}'));
+        File(
+          p.join(
+            bucket.path,
+            '$hash${optimized?.extension ?? _extension(source.path)}',
+          ),
+        );
     if (existing == null) {
-      await _atomicCopy(source, stored, expectedHash: hash);
+      if (optimized case final compressed?) {
+        await writeOptimizedAsset(stored, compressed.bytes);
+      } else {
+        await _atomicCopy(source, stored, expectedHash: hash);
+      }
     }
 
     return ScrapAsset(
@@ -302,7 +317,7 @@ class VaultRepository {
         p.relative(stored.path, from: (relativeFrom ?? scrapsDirectory).path),
       ),
       originalName: p.basename(source.path),
-      mimeType: _mimeType(source.path),
+      mimeType: _mimeType(stored.path),
     );
   }
 

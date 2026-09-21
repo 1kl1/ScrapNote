@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import 'sync_manifest.dart';
+import '../vault/oversized_image_migrator.dart';
 
 abstract interface class SyncRemote {
   /// Includes the server and authenticated user; prevents cross-account uploads.
@@ -21,11 +22,17 @@ class SyncBusy implements Exception {
 }
 
 class VaultSyncEngine {
-  VaultSyncEngine(this.root, this.remote);
+  VaultSyncEngine(
+    this.root,
+    this.remote, {
+    this.maxFileBytes = 25 * 1024 * 1024,
+    this.imageMaxDimension = 4096,
+  });
   final Directory root;
   final SyncRemote remote;
+  final int maxFileBytes;
+  final int imageMaxDimension;
   bool _running = false;
-  static const maxFileBytes = 25 * 1024 * 1024;
   File get _state => File(p.join(root.path, '.sync', 'state.json'));
 
   Future<void> synchronize({
@@ -35,8 +42,15 @@ class VaultSyncEngine {
     _running = true;
     try {
       final base = await _baseline();
-      final local = await scan();
       final remoteManifest = await remote.readManifest();
+      // The user explicitly requested sync. Prepare old over-limit photos only
+      // after the server is reachable, before taking the local manifest.
+      await OversizedImageMigrator(
+        root,
+        maxBytes: maxFileBytes,
+        maxDimension: imageMaxDimension,
+      ).migrate();
+      final local = await scan();
       final merged = mergeManifests(
         base,
         local,

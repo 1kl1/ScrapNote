@@ -98,6 +98,10 @@ dates, and file-like labels use the platform monospace. Body text is at least
   render inside the editing surface while their portable relative Markdown
   links remain the saved source of truth. Pending attachments use a compact
   editor status line rather than toolbar chrome.
+- Large static photos are resized and compressed in the background when saved
+  into the Vault; picked originals remain untouched. A manual sync also repairs
+  previously stored photos above the server's 25 MiB limit, relinks Notes and
+  Scraps, and keeps their original files and Markdown in recoverable Vault trash.
 - Image-bearing editors scroll as one fully measured document. Blocks remain
   mounted across viewport boundaries, so estimated lazy-list heights cannot
   change the scroll extent or move the reader by an image-sized step.

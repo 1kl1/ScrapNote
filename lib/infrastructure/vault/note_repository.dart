@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../../domain/note.dart';
 import '../../domain/scrap.dart';
 import 'note_file_codec.dart';
+import 'image_attachment_optimizer.dart';
 
 typedef NoteIdGenerator = String Function();
 typedef NoteClock = DateTime Function();
@@ -19,6 +20,7 @@ class NoteRepository {
     NoteFileCodec? codec,
     NoteIdGenerator? idGenerator,
     NoteClock? now,
+    this._imageOptimizer = const ImageAttachmentOptimizer(),
   }) : codec = codec ?? const NoteFileCodec(),
        _idGenerator = idGenerator ?? const Uuid().v7,
        _now = now ?? DateTime.now;
@@ -27,6 +29,7 @@ class NoteRepository {
   final NoteFileCodec codec;
   final NoteIdGenerator _idGenerator;
   final NoteClock _now;
+  final ImageAttachmentOptimizer _imageOptimizer;
 
   Directory get notesDirectory => Directory(path.join(root.path, 'notes'));
   Directory get assetsDirectory =>
@@ -111,10 +114,11 @@ class NoteRepository {
     await initialize();
     final directory = _folderDirectory(folder);
     await directory.create(recursive: true);
-    final assets = await _importAssets(
+    final imported = await _importAssets(
       attachmentPaths,
       relativeFrom: directory,
     );
+    final assets = _uniqueAssets(imported.values);
     final now = _now().toUtc();
     final id = _idGenerator();
     final file = File(
@@ -123,7 +127,7 @@ class NoteRepository {
     final note = Note(
       id: id,
       title: title.trim(),
-      body: await _resolveAssetLinks(body, attachmentPaths, directory),
+      body: _resolveAssetLinks(body, imported),
       folder: folder,
       createdAt: now,
       updatedAt: now,
@@ -151,18 +155,18 @@ class NoteRepository {
       await file.readAsString(),
       filePath: file.path,
     );
-    final added = await _importAssets(
+    final imported = await _importAssets(
       attachmentPaths,
       relativeFrom: file.parent,
     );
     final hashes = persisted.assets.map((asset) => asset.hash).toSet();
-    final uniqueAdded = added
+    final uniqueAdded = imported.values
         .where((asset) => hashes.add(asset.hash))
         .toList(growable: false);
     final note = Note(
       id: persisted.id,
       title: title?.trim() ?? persisted.title,
-      body: await _resolveAssetLinks(body, attachmentPaths, file.parent),
+      body: _resolveAssetLinks(body, imported),
       folder: persisted.folder,
       createdAt: persisted.createdAt,
       updatedAt: _now().toUtc(),
@@ -334,14 +338,10 @@ class NoteRepository {
     return Directory(target);
   }
 
-  Future<String> _resolveAssetLinks(
-    String body,
-    Iterable<String> sources,
-    Directory directory,
-  ) async {
-    for (final source in sources.toSet()) {
-      final assets = await _importAssets([source], relativeFrom: directory);
-      final asset = assets.single;
+  String _resolveAssetLinks(String body, Map<String, ScrapAsset> imported) {
+    for (final entry in imported.entries) {
+      final source = entry.key;
+      final asset = entry.value;
       body = InlineImage.persist(
         body,
         source,
@@ -352,40 +352,61 @@ class NoteRepository {
     return body;
   }
 
-  Future<List<ScrapAsset>> _importAssets(
+  static List<ScrapAsset> _uniqueAssets(Iterable<ScrapAsset> assets) {
+    final hashes = <String>{};
+    return List<ScrapAsset>.unmodifiable(
+      assets.where((asset) => hashes.add(asset.hash)),
+    );
+  }
+
+  Future<Map<String, ScrapAsset>> _importAssets(
     Iterable<String> paths, {
     required Directory relativeFrom,
   }) async {
-    final assets = <ScrapAsset>[];
-    final seen = <String>{};
-    for (final sourcePath in paths) {
+    final assets = <String, ScrapAsset>{};
+    for (final sourcePath in paths.toSet()) {
       final source = File(sourcePath);
       if (!await source.exists()) {
         throw FileSystemException('Attachment does not exist.', sourcePath);
       }
-      final hash = (await sha256.bind(source.openRead()).first).toString();
-      if (!seen.add(hash)) continue;
+      final optimized = await _imageOptimizer.optimize(source);
+      final hash = optimized == null
+          ? (await sha256.bind(source.openRead()).first).toString()
+          : sha256.convert(optimized.bytes).toString();
       final bucket = Directory(
         path.join(assetsDirectory.path, hash.substring(0, 2)),
       );
       await bucket.create(recursive: true);
-      final extension = path.extension(sourcePath).toLowerCase();
-      final stored = File(path.join(bucket.path, '$hash$extension'));
-      if (!await stored.exists()) {
-        await source.copy(stored.path);
+      final extension =
+          optimized?.extension ?? path.extension(sourcePath).toLowerCase();
+      File? existing;
+      await for (final entry in bucket.list(followLinks: false)) {
+        if (entry is File &&
+            (path.basename(entry.path) == hash ||
+                path.basename(entry.path).startsWith('$hash.'))) {
+          existing = entry;
+          break;
+        }
       }
-      assets.add(
-        ScrapAsset(
-          hash: hash,
-          relativePath: path
-              .relative(stored.path, from: relativeFrom.path)
-              .replaceAll(r'\', '/'),
-          originalName: path.basename(sourcePath),
-          mimeType: _mimeType(extension),
-        ),
+      final stored =
+          existing ?? File(path.join(bucket.path, '$hash$extension'));
+      if (existing == null) {
+        if (optimized case final compressed?) {
+          await writeOptimizedAsset(stored, compressed.bytes);
+        } else {
+          await source.copy(stored.path);
+        }
+      }
+      assets[sourcePath] = ScrapAsset(
+        hash: hash,
+        relativePath: path
+            .relative(stored.path, from: relativeFrom.path)
+            .replaceAll(r'\', '/'),
+        originalName: path.basename(sourcePath),
+        mimeType: _mimeType(path.extension(stored.path).toLowerCase()),
       );
     }
-    return List<ScrapAsset>.unmodifiable(assets);
+    return Map<String, ScrapAsset>.unmodifiable(assets);
   }
 
   static Future<void> _atomicWrite(File file, String contents) async {
