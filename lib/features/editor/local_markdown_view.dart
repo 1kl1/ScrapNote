@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../../core/design/scrapnote_tokens.dart';
+import 'inline_image.dart';
 
 /// Renders Markdown while resolving relative image links from a local folder.
 class LocalMarkdownView extends StatelessWidget {
@@ -26,36 +27,92 @@ class LocalMarkdownView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final directoryUri = Uri.directory(imageDirectory).toString();
-    return MarkdownBody(
-      data: data,
+    Widget image(Uri uri, String? title, String? alt) {
+      final resolved = uri.hasScheme
+          ? uri
+          : Uri.parse(directoryUri).resolveUri(uri);
+      return _DocumentImage(
+        label: alt,
+        alignment: title,
+        child: _resolvedImage(resolved),
+      );
+    }
+
+    Widget markdown(String source) => MarkdownBody(
+      data: source,
       selectable: selectable,
       imageDirectory: directoryUri,
       styleSheet: _styleSheet(context),
-      imageBuilder: (uri, title, alt) {
-        final resolved = uri.hasScheme
-            ? uri
-            : Uri.parse(directoryUri).resolveUri(uri);
-        if (resolved.scheme == 'http' || resolved.scheme == 'https') {
-          return _DocumentImage(
-            label: alt,
-            alignment: title,
-            child: Image.network(
-              resolved.toString(),
-              fit: BoxFit.contain,
-              errorBuilder: _imageError,
-            ),
-          );
-        }
-        return _DocumentImage(
-          label: alt,
-          alignment: title,
-          child: Image.file(
-            File.fromUri(resolved),
-            fit: BoxFit.contain,
-            errorBuilder: _imageError,
+      imageBuilder: image,
+    );
+
+    final rows = InlineImageRow.pattern.allMatches(data).toList();
+    if (rows.isEmpty) return Padding(padding: padding, child: markdown(data));
+    final children = <Widget>[];
+    var offset = 0;
+    for (final row in rows) {
+      final before = data.substring(offset, row.start);
+      if (before.trim().isNotEmpty) children.add(markdown(before));
+      children.add(
+        SizedBox(
+          height: 230,
+          child: _PreviewImageStrip(
+            images: <Widget>[
+              for (final item in InlineImageRow.items(row.group(0)!))
+                _previewRowImage(item, directoryUri),
+            ],
           ),
-        );
-      },
+        ),
+      );
+      offset = row.end;
+    }
+    final after = data.substring(offset);
+    if (after.trim().isNotEmpty) children.add(markdown(after));
+    return Padding(
+      padding: padding,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children,
+      ),
+    );
+  }
+
+  static Widget _resolvedImage(Uri uri) {
+    if (uri.scheme == 'http' || uri.scheme == 'https') {
+      return Image.network(
+        uri.toString(),
+        fit: BoxFit.contain,
+        errorBuilder: _imageError,
+      );
+    }
+    return Image.file(
+      File.fromUri(uri),
+      fit: BoxFit.contain,
+      errorBuilder: _imageError,
+    );
+  }
+
+  static Widget _previewRowImage(String markdown, String directoryUri) {
+    final match = InlineImage.pattern.firstMatch(markdown)!;
+    final uri = Uri.parse(directoryUri).resolve(match.group(2)!);
+    final label = match.group(1)!.replaceAll(r'\[', '[').replaceAll(r'\]', ']');
+    return SizedBox(
+      width: 260,
+      child: Semantics(
+        image: true,
+        label: label.isEmpty ? 'Document image' : label,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: ScrapnoteTokens.paperSunken,
+            border: Border.all(color: ScrapnoteTokens.rule),
+            borderRadius: BorderRadius.circular(ScrapnoteTokens.radius),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(ScrapnoteTokens.space2),
+            child: ClipRect(child: _resolvedImage(uri)),
+          ),
+        ),
+      ),
     );
   }
 
@@ -114,6 +171,39 @@ class LocalMarkdownView extends StatelessWidget {
       blockSpacing: ScrapnoteTokens.space3,
     );
   }
+}
+
+class _PreviewImageStrip extends StatefulWidget {
+  const _PreviewImageStrip({required this.images});
+
+  final List<Widget> images;
+
+  @override
+  State<_PreviewImageStrip> createState() => _PreviewImageStripState();
+}
+
+class _PreviewImageStripState extends State<_PreviewImageStrip> {
+  final ScrollController _controller = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scrollbar(
+    controller: _controller,
+    thumbVisibility: true,
+    child: ListView.separated(
+      key: const ValueKey<String>('preview-horizontal-image-row'),
+      controller: _controller,
+      scrollDirection: Axis.horizontal,
+      itemCount: widget.images.length,
+      separatorBuilder: (_, _) => const SizedBox(width: ScrapnoteTokens.space3),
+      itemBuilder: (_, index) => widget.images[index],
+    ),
+  );
 }
 
 class _DocumentImage extends StatelessWidget {

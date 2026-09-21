@@ -15,6 +15,19 @@ class InlineImage {
   static String encodePath(String path) =>
       Uri(path: path).toString().replaceAll('(', '%28').replaceAll(')', '%29');
 
+  static String selectionMarkdown(
+    Iterable<String> sources, {
+    String Function(String source)? labelFor,
+  }) {
+    final images = <String>[
+      for (final source in sources)
+        markdown(source, label: labelFor?.call(source) ?? 'Image'),
+    ];
+    if (images.isEmpty) return '';
+    if (images.length == 1) return images.single;
+    return InlineImageRow.wrap(images);
+  }
+
   static void insert(TextEditingController controller, String content) {
     final selection = controller.selection;
     final start = selection.isValid ? selection.start : controller.text.length;
@@ -82,4 +95,21 @@ class InlineImage {
     }
     return '${body.isEmpty ? '' : '$body\n\n'}![${label.replaceAll(']', r'\]')}]($target)';
   }
+}
+
+/// Delimits images chosen in one action while keeping every item valid,
+/// portable Markdown on disk.
+abstract final class InlineImageRow {
+  static const begin = '<!-- scrapnote:image-row:begin -->';
+  static const end = '<!-- scrapnote:image-row:end -->';
+
+  static final pattern = RegExp('$begin\\n([\\s\\S]*?)\\n$end');
+
+  static String wrap(Iterable<String> imageMarkdown) =>
+      '$begin\n${imageMarkdown.join('\n')}\n$end';
+
+  static List<String> items(String block) => InlineImage.pattern
+      .allMatches(pattern.firstMatch(block)?.group(1) ?? block)
+      .map((match) => match.group(0)!)
+      .toList(growable: false);
 }

@@ -93,4 +93,27 @@ void main() {
       expect(note.body, isNot(contains('.jpg')));
     },
   );
+
+  test('multi-image rows survive attachment import and reopen', () async {
+    final second = File('${vault.path}/second.png');
+    await second.writeAsBytes([4, 5, 6]);
+    final repo = NoteRepository(vault);
+    final body = InlineImage.selectionMarkdown([
+      image.path,
+      second.path,
+    ], labelFor: (source) => Uri.file(source).pathSegments.last);
+
+    final saved = await repo.createNote(
+      body,
+      folder: '',
+      attachmentPaths: [image.path, second.path],
+    );
+    final reopened = (await repo.listNotes()).single;
+
+    expect(saved.body, contains(InlineImageRow.begin));
+    expect(reopened.body, saved.body);
+    expect(InlineImageRow.items(reopened.body), hasLength(2));
+    expect(reopened.body, isNot(contains('file:')));
+    expect(reopened.assets, hasLength(2));
+  });
 }

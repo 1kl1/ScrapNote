@@ -37,7 +37,7 @@ class InlineDocumentEditor extends StatefulWidget {
   State<InlineDocumentEditor> createState() => _InlineDocumentEditorState();
 }
 
-enum _Kind { text, image, scrap }
+enum _Kind { text, image, imageRow, scrap }
 
 class _Block {
   _Block(this.content, this.kind, {this.virtual = false})
@@ -79,7 +79,7 @@ class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
   bool _writing = false;
   String _lastBody = '';
   static final _objects = RegExp(
-    '${ScrapEmbed.pattern.pattern}|${InlineImage.pattern.pattern}',
+    '${InlineImageRow.pattern.pattern}|${ScrapEmbed.pattern.pattern}|${InlineImage.pattern.pattern}',
   );
 
   @override
@@ -114,7 +114,14 @@ class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
       }
       final raw = match.group(0)!;
       _blocks.add(
-        _Block(raw, raw.startsWith('<!--') ? _Kind.scrap : _Kind.image),
+        _Block(
+          raw,
+          raw.startsWith(InlineImageRow.begin)
+              ? _Kind.imageRow
+              : raw.startsWith('<!--')
+              ? _Kind.scrap
+              : _Kind.image,
+        ),
       );
       start = match.end;
       if (start < body.length && body[start] == '\n') start++;
@@ -228,6 +235,26 @@ class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
     _restoreCaret();
     WidgetsBinding.instance.addPostFrameCallback((_) => block.dispose());
     _releaseRemovedImages(removedContent);
+  }
+
+  void _removeImageFromRow(_Block block, int index) {
+    final previousContent = block.content;
+    final items = InlineImageRow.items(block.content).toList();
+    if (index < 0 || index >= items.length) return;
+    items.removeAt(index);
+    if (items.isEmpty) {
+      _remove(block);
+      return;
+    }
+    setState(() {
+      block.content = items.length == 1
+          ? items.single
+          : InlineImageRow.wrap(items);
+      _write();
+      _parse();
+    });
+    _restoreCaret();
+    _releaseRemovedImages(previousContent);
   }
 
   bool _deleteEmptyObjectGap(_Block block) {
@@ -403,9 +430,11 @@ class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
                       padding: const EdgeInsets.only(left: 58),
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(24, 8, 32, 8),
-                        child: block.kind == _Kind.image
-                            ? _image(block)
-                            : _scrap(block),
+                        child: switch (block.kind) {
+                          _Kind.image => _image(block),
+                          _Kind.imageRow => _imageRow(block),
+                          _ => _scrap(block),
+                        },
                       ),
                     ),
                   ],
@@ -532,6 +561,104 @@ class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
     );
   }
 
+  Widget _imageRow(_Block block) {
+    final items = InlineImageRow.items(block.content);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        SizedBox(
+          height: 220,
+          child: _HorizontalImageStrip(
+            key: const ValueKey<String>('horizontal-image-row'),
+            children: <Widget>[
+              for (var index = 0; index < items.length; index++)
+                _imageRowItem(items[index], index, block),
+            ],
+          ),
+        ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: <Widget>[
+            Text(
+              '사진 ${items.length}장 · 가로로 스크롤',
+              style: const TextStyle(
+                color: ScrapnoteTokens.mutedInk,
+                fontSize: 11,
+              ),
+            ),
+            const SizedBox(width: ScrapnoteTokens.space2),
+            _action(
+              'Remove image row',
+              FLucideIcons.trash2,
+              () => _remove(block),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _imageRowItem(String markdown, int index, _Block block) {
+    final match = InlineImage.pattern.firstMatch(markdown)!;
+    final uri = Uri.directory(widget.imageDirectory).resolve(match.group(2)!);
+    final label = match.group(1)!.replaceAll(r'\[', '[').replaceAll(r'\]', ']');
+    Widget error(BuildContext context, Object error, StackTrace? stack) =>
+        const Center(child: Text('Image unavailable'));
+    final image = uri.scheme == 'http' || uri.scheme == 'https'
+        ? Image.network(
+            uri.toString(),
+            fit: BoxFit.contain,
+            errorBuilder: error,
+          )
+        : uri.scheme == 'file'
+        ? Image.file(
+            File.fromUri(uri),
+            fit: BoxFit.contain,
+            errorBuilder: error,
+          )
+        : const Center(child: Text('Image unavailable'));
+    return SizedBox(
+      width: 230,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: ScrapnoteTokens.paperSunken,
+          border: Border.all(color: ScrapnoteTokens.rule),
+          borderRadius: BorderRadius.circular(ScrapnoteTokens.radius),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Expanded(child: ClipRect(child: image)),
+            SizedBox(
+              height: 38,
+              child: Row(
+                children: <Widget>[
+                  const SizedBox(width: ScrapnoteTokens.space2),
+                  Expanded(
+                    child: Text(
+                      label.isEmpty ? '사진 ${index + 1}' : label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: ScrapnoteTokens.charcoalSoft,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                  _action(
+                    'Remove image ${index + 1} from row',
+                    FLucideIcons.x,
+                    () => _removeImageFromRow(block, index),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _action(String label, IconData icon, VoidCallback action) => Tooltip(
     message: label,
     child: FButton.icon(
@@ -539,6 +666,38 @@ class _InlineDocumentEditorState extends State<InlineDocumentEditor> {
       onPress: widget.enabled ? action : null,
       semanticsLabel: label,
       child: Icon(icon, size: 14),
+    ),
+  );
+}
+
+class _HorizontalImageStrip extends StatefulWidget {
+  const _HorizontalImageStrip({required this.children, super.key});
+
+  final List<Widget> children;
+
+  @override
+  State<_HorizontalImageStrip> createState() => _HorizontalImageStripState();
+}
+
+class _HorizontalImageStripState extends State<_HorizontalImageStrip> {
+  final ScrollController _controller = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scrollbar(
+    controller: _controller,
+    thumbVisibility: true,
+    child: ListView.separated(
+      controller: _controller,
+      scrollDirection: Axis.horizontal,
+      itemCount: widget.children.length,
+      separatorBuilder: (_, _) => const SizedBox(width: ScrapnoteTokens.space3),
+      itemBuilder: (_, index) => widget.children[index],
     ),
   );
 }

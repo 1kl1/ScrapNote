@@ -76,6 +76,7 @@ void main() {
     final controller = NoteController();
     await tester.runAsync(() => controller.connect(vault.path));
     final textController = TextEditingController();
+    var exportRequested = false;
     addTearDown(textController.dispose);
 
     await tester.pumpWidget(
@@ -97,6 +98,7 @@ void main() {
                 onPasteImage: () async => false,
                 onImagesDropped: (_) {},
                 onRemoveImage: (_) {},
+                onExportNaverBlog: () => exportRequested = true,
               ),
             ),
           ),
@@ -116,5 +118,7 @@ void main() {
     expect(controller.activeDocument!.draftTitle, 'My title');
     expect(controller.activeDocument!.dirty, isTrue);
     expect(find.text('My title'), findsNWidgets(2));
+    await tester.tap(find.byTooltip('네이버 블로그로 내보내기'));
+    expect(exportRequested, isTrue);
   });
 }

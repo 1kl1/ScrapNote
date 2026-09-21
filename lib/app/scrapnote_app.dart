@@ -26,6 +26,8 @@ import 'package:scrapnote/app/vault_onboarding.dart';
 import 'package:scrapnote/core/design/scrapnote_tokens.dart';
 import 'package:scrapnote/features/editor/editor_document.dart';
 import 'package:scrapnote/features/editor/editor_session_controller.dart';
+import 'package:scrapnote/features/notes/naver_blog_export.dart';
+import 'package:scrapnote/features/notes/naver_blog_export_dialog.dart';
 import 'package:scrapnote/features/notes/note_controller.dart';
 import 'package:scrapnote/features/notes/notes_workspace.dart';
 import 'package:scrapnote/features/scraps/scrap_controller.dart';
@@ -549,6 +551,7 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
         onPasteImage: _pasteImage,
         onImagesDropped: _addImagePaths,
         onRemoveImage: _removeImage,
+        onExportNaverBlog: () => unawaited(_exportActiveNoteToNaverBlog()),
       ),
       ScrapnoteSection.expenses => ExpensesView(controller: _expenseController),
       ScrapnoteSection.timeline => TimelineView(
@@ -976,18 +979,24 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
     if (_saveInFlight || _noteController.saving) return;
     _ensureActiveDocument();
     var rejected = 0;
+    final accepted = <String>[];
     for (final imagePath in paths) {
       if (!_imageExtensions.contains(path.extension(imagePath).toLowerCase())) {
         rejected += 1;
         continue;
       }
+      accepted.add(imagePath);
+    }
+    if (accepted.isNotEmpty) {
       final text = _section == ScrapnoteSection.notes
           ? _noteTextController
           : _editorController;
       InlineImage.insert(
         text,
-        InlineImage.markdown(imagePath, label: path.basename(imagePath)),
+        InlineImage.selectionMarkdown(accepted, labelFor: path.basename),
       );
+    }
+    for (final imagePath in accepted) {
       if (_section == ScrapnoteSection.notes) {
         _noteController.addAttachment(imagePath);
       } else {
@@ -1103,6 +1112,23 @@ class _ScrapnoteWorkspaceState extends State<ScrapnoteWorkspace>
       }
     }
     return saved;
+  }
+
+  Future<void> _exportActiveNoteToNaverBlog() async {
+    final active = _noteController.activeDocument;
+    if (active == null) return;
+    final imageDirectory = active.note == null
+        ? path.join(_noteController.vaultPath ?? '', 'notes', active.folder)
+        : path.dirname(active.note!.filePath);
+    final export = NaverBlogExport.fromMarkdown(
+      title: active.title,
+      markdown: active.body,
+      imageDirectory: imageDirectory,
+    );
+    await showDialog<void>(
+      context: context,
+      builder: (_) => NaverBlogExportDialog(export: export),
+    );
   }
 
   Future<void> _closeActiveDocument() async {

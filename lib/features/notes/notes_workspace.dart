@@ -31,6 +31,7 @@ class NotesWorkspace extends StatelessWidget {
     required this.onPasteImage,
     required this.onImagesDropped,
     required this.onRemoveImage,
+    this.onExportNaverBlog,
     this.scraps = const [],
     this.onInsertScrap,
     this.onEmbeddedImageAdded,
@@ -50,6 +51,7 @@ class NotesWorkspace extends StatelessWidget {
   final Future<bool> Function() onPasteImage;
   final ValueChanged<List<String>> onImagesDropped;
   final ValueChanged<String> onRemoveImage;
+  final VoidCallback? onExportNaverBlog;
 
   @override
   Widget build(BuildContext context) {
@@ -79,6 +81,7 @@ class NotesWorkspace extends StatelessWidget {
               onImagesDropped: onImagesDropped,
               onRemoveImage: onRemoveImage,
               onPasteImage: onPasteImage,
+              onExportNaverBlog: onExportNaverBlog,
             );
             return AdaptiveWorkspace(
               selection: noteController.activeSessionId,
@@ -119,6 +122,7 @@ class _NoteDocumentArea extends StatefulWidget {
     required this.onImagesDropped,
     required this.onRemoveImage,
     required this.onPasteImage,
+    required this.onExportNaverBlog,
   });
 
   final ValueChanged<String>? onEmbeddedImageAdded;
@@ -133,6 +137,7 @@ class _NoteDocumentArea extends StatefulWidget {
   final ValueChanged<List<String>> onImagesDropped;
   final ValueChanged<String> onRemoveImage;
   final Future<bool> Function() onPasteImage;
+  final VoidCallback? onExportNaverBlog;
 
   @override
   State<_NoteDocumentArea> createState() => _NoteDocumentAreaState();
@@ -191,6 +196,11 @@ class _NoteDocumentAreaState extends State<_NoteDocumentArea> {
                     prefix: const Icon(FLucideIcons.pencil, size: 14),
                     child: const Text('Edit'),
                   ),
+                _IconAction(
+                  tooltip: '네이버 블로그로 내보내기',
+                  icon: FLucideIcons.send,
+                  onPressed: active == null ? null : widget.onExportNaverBlog,
+                ),
                 _IconAction(
                   tooltip: 'New note · ⌘N',
                   icon: FLucideIcons.plus,

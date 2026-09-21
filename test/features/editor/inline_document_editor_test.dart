@@ -9,6 +9,7 @@ import 'package:forui/forui.dart';
 import 'package:scrapnote/app/scrapnote_theme.dart';
 import 'package:scrapnote/features/editor/inline_document_editor.dart';
 import 'package:scrapnote/features/editor/inline_image.dart';
+import 'package:scrapnote/features/editor/local_markdown_view.dart';
 
 void main() {
   for (final key in [LogicalKeyboardKey.backspace, LogicalKeyboardKey.delete]) {
@@ -260,6 +261,84 @@ void main() {
     );
     controller.dispose();
   });
+
+  testWidgets(
+    'an image selection is one horizontally scrollable row in edit and preview',
+    (tester) async {
+      final content = InlineImage.selectionMarkdown(<String>[
+        '/tmp/first.png',
+        '/tmp/second.png',
+        '/tmp/third.png',
+      ], labelFor: (source) => Uri.file(source).pathSegments.last);
+      expect(content, startsWith(InlineImageRow.begin));
+      expect(InlineImage.pattern.allMatches(content), hasLength(3));
+      final controller = TextEditingController(text: 'Before\n$content\nAfter');
+      addTearDown(controller.dispose);
+      final removed = <String>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: FTheme(
+            data: ScrapnoteTheme.foruiTheme,
+            child: Scaffold(
+              body: InlineDocumentEditor(
+                controller: controller,
+                imageDirectory: '/tmp',
+                onRemoveImage: removed.add,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final row = find.byKey(const ValueKey('horizontal-image-row'));
+      expect(row, findsOneWidget);
+      expect(
+        tester
+            .widget<ListView>(
+              find.descendant(of: row, matching: find.byType(ListView)),
+            )
+            .scrollDirection,
+        Axis.horizontal,
+      );
+      expect(find.byType(Image), findsNWidgets(3));
+      expect(find.byType(EditableText), findsNWidgets(2));
+
+      await tester.tap(find.byTooltip('Remove image 1 from row'));
+      await tester.pumpAndSettle();
+      expect(InlineImage.pattern.allMatches(controller.text), hasLength(2));
+      expect(controller.text, contains(InlineImageRow.begin));
+      expect(removed, <String>['/tmp/first.png']);
+
+      await tester.tap(find.byTooltip('Remove image 1 from row'));
+      await tester.pumpAndSettle();
+      expect(InlineImage.pattern.allMatches(controller.text), hasLength(1));
+      expect(controller.text, isNot(contains(InlineImageRow.begin)));
+      expect(row, findsNothing);
+      expect(removed, <String>['/tmp/first.png', '/tmp/second.png']);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: LocalMarkdownView(
+              data: 'Before\n$content\nAfter',
+              imageDirectory: '/tmp',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final preview = find.byKey(
+        const ValueKey('preview-horizontal-image-row'),
+      );
+      expect(preview, findsOneWidget);
+      expect(tester.widget<ListView>(preview).scrollDirection, Axis.horizontal);
+      expect(find.byType(Image), findsNWidgets(3));
+      expect(find.text('Before'), findsOneWidget);
+      expect(find.text('After'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'keeps numbered text around an image with size, alignment and removal',

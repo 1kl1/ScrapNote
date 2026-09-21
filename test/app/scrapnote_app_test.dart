@@ -69,6 +69,7 @@ void main() {
     NoteController? notes,
     ExpenseController? expenses,
     ClipboardImageReader? readClipboard,
+    ImagePathPicker? pickImages,
     SupabaseClient? syncClient,
     VaultSynchronizer vaultSynchronizer = synchronizeVault,
     Size size = const Size(1200, 720),
@@ -90,6 +91,7 @@ void main() {
         noteController: notes,
         expenseController: expenses,
         clipboardImageReader: readClipboard,
+        imagePathPicker: pickImages,
         editorSessionController: editorSession,
         recoveryStore: recoveryStore(),
         windowCloseGuard: closeGuard,
@@ -236,6 +238,41 @@ void main() {
       );
       expect(session.activeDocument!.body, endsWith('\nAfter'));
       expect(session.activeDocument!.pendingImagePaths, hasLength(1));
+    },
+  );
+
+  testWidgets(
+    'choosing several images inserts one horizontally scrollable row',
+    (tester) async {
+      final scraps = controller(picker: () async => vaultDirectory.path);
+      await tester.runAsync(scraps.chooseVault);
+      final session = EditorSessionController()..newDocument();
+      final images = <String>[
+        '${sandbox.path}/first.png',
+        '${sandbox.path}/second.png',
+        '${sandbox.path}/third.png',
+      ];
+      await pumpApp(
+        tester,
+        scrapController: scraps,
+        editorSession: session,
+        pickImages: () async => images,
+        size: const Size(500, 720),
+      );
+
+      await tester.tap(find.byKey(const ValueKey('workspace-image')));
+      await tester.pumpAndSettle();
+
+      expect(session.activeDocument!.pendingImagePaths, images);
+      expect(session.activeDocument!.body, contains(InlineImageRow.begin));
+      expect(
+        InlineImage.pattern.allMatches(session.activeDocument!.body),
+        hasLength(3),
+      );
+      expect(
+        find.byKey(const ValueKey('horizontal-image-row')),
+        findsOneWidget,
+      );
     },
   );
 
