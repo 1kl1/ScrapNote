@@ -461,7 +461,7 @@ class _DocumentWorkspace extends StatelessWidget {
             onSelected: onTabSelected,
             onClosed: onTabClosed,
             locationMissing:
-                activeScrap != null && activeScrap!.location == null,
+                activeScrap != null && activeScrap!.locations.isEmpty,
           ),
           const _Hairline(),
           Expanded(
@@ -482,7 +482,7 @@ class _DocumentWorkspace extends StatelessWidget {
                     ),
                   ),
           ),
-          if (activeScrap != null && activeScrap!.location == null)
+          if (activeScrap != null && activeScrap!.locations.isEmpty)
             const _MissingLocationLine(),
           if (saving) const LinearProgressIndicator(minHeight: 2),
         ],

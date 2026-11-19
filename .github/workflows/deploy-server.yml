@@ -1,0 +1,81 @@
+name: Deploy sync server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/deploy-server.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scrapnote-server-production
+  cancel-in-progress: false
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Test server
+        working-directory: server
+        run: npm ci && npm test
+      - name: Configure SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.SCRAPNOTE_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SCRAPNOTE_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          test -n "$DEPLOY_KEY" && test -n "$KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/scrapnote_deploy
+          chmod 600 ~/.ssh/scrapnote_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Build and restart API
+        run: |
+          set -euo pipefail
+          tar -C server -czf /tmp/scrapnote-server.tar.gz --exclude=node_modules --exclude='.env*' .
+          scp -i ~/.ssh/scrapnote_deploy -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            /tmp/scrapnote-server.tar.gz ubuntu@134.185.114.149:/tmp/scrapnote-server-${GITHUB_RUN_ID}.tar.gz
+          ssh -i ~/.ssh/scrapnote_deploy -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            ubuntu@134.185.114.149 "bash -s -- ${GITHUB_RUN_ID}" <<'REMOTE'
+          set -euo pipefail
+          run_id="$1"
+          archive="/tmp/scrapnote-server-${run_id}.tar.gz"
+          build_dir=$(mktemp -d)
+          trap 'rm -rf "$build_dir"; rm -f "$archive"' EXIT
+          tar -xzf "$archive" -C "$build_dir"
+          docker build -t scrapnote-api:candidate "$build_dir"
+          docker image tag scrapnote-api:1.0.0 scrapnote-api:previous
+          docker image tag scrapnote-api:candidate scrapnote-api:1.0.0
+          compose() {
+            sudo -n sh -c 'cd /data/coolify/services/e7aoqro0dfik9uxwx9lxnwfq && docker compose "$@"' -- "$@"
+          }
+          healthy() {
+            for i in $(seq 1 30); do
+              id=$(compose ps -q api)
+              if [ -n "$id" ] && [ "$(docker inspect -f '{{.State.Health.Status}}' "$id")" = healthy ]; then
+                return 0
+              fi
+              sleep 2
+            done
+            return 1
+          }
+          if compose up -d --no-deps --force-recreate api && healthy; then
+            echo 'API deployment is healthy.'
+          else
+            echo 'Deployment failed; restoring previous image.' >&2
+            docker image tag scrapnote-api:previous scrapnote-api:1.0.0
+            compose up -d --no-deps --force-recreate api
+            healthy || echo 'Rollback did not become healthy; inspect Coolify.' >&2
+            exit 1
+          fi
+          REMOTE

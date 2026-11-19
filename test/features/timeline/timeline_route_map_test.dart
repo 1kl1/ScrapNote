@@ -34,6 +34,66 @@ class _Tiles extends TileProvider {
 }
 
 void main() {
+  testWidgets(
+    'one scrap contributes multiple photo markers in photo time order',
+    (tester) async {
+      final fallback = scrap('Photos', 18, 51).location!;
+      ScrapAsset photo(String name, int hour, double latitude) => ScrapAsset(
+        hash: name,
+        relativePath: '../assets/$name.jpg',
+        originalName: '$name.jpg',
+        mimeType: 'image/jpeg',
+        location: ScrapLocation(
+          latitude: latitude,
+          longitude: 127,
+          accuracyMeters: 0,
+          source: 'photo_exif',
+          capturedAt: DateTime.utc(2026, 9, 12, hour),
+        ),
+      );
+      final photos = Scrap(
+        id: 'Photos',
+        body:
+            'Photos\n![late](../assets/late.jpg)\n![early](../assets/early.jpg)',
+        createdAt: DateTime.utc(2026, 9, 12, 18),
+        updatedAt: DateTime.utc(2026, 9, 12, 18),
+        assets: [photo('late', 15, 38), photo('early', 9, 37)],
+        location: fallback,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TimelineRouteMap(
+              scraps: [photos, scrap('Missing', 12, 0, located: false)],
+              tileProvider: _Tiles(),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final line = tester
+          .widget<PolylineLayer>(find.byType(PolylineLayer))
+          .polylines
+          .single;
+      expect(line.points.map((point) => point.latitude), [37, 38]);
+      expect(
+        tester.widget<MarkerLayer>(find.byType(MarkerLayer)).markers,
+        hasLength(2),
+      );
+      expect(
+        find.text('2 locations · Capture order · 1 without location'),
+        findsOneWidget,
+      );
+      expect(
+        TimelineRouteMap.routeLocations([
+          photos,
+        ]).map((entry) => entry.photoName),
+        ['early.jpg', 'late.jpg'],
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('route connects valid capture locations in time order', (
     tester,
   ) async {

@@ -216,6 +216,8 @@ class NoteRepository {
               .replaceAll(r'\', '/'),
           originalName: asset.originalName,
           mimeType: asset.mimeType,
+          location: asset.location,
+          photoMetadataRead: asset.photoMetadataRead,
         ),
     ],
   );

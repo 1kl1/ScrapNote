@@ -10,6 +10,7 @@ import 'package:scrapnote/infrastructure/vault/front_matter_codec.dart';
 import 'package:uuid/uuid.dart';
 
 import 'image_attachment_optimizer.dart';
+import 'photo_location_reader.dart';
 
 typedef ScrapIdGenerator = String Function();
 typedef VaultClock = DateTime Function();
@@ -64,7 +65,7 @@ class VaultRepository {
       }
 
       try {
-        scraps.add(codec.decode(await entity.readAsString()));
+        scraps.add(await _readScrap(entity));
       } on FormatException catch (error) {
         throw FormatException(
           'Could not read ${entity.path}: ${error.message}',
@@ -93,10 +94,14 @@ class VaultRepository {
   }) async {
     await initialize();
 
+    final localNow = _now();
     final assets = <ScrapAsset>[];
     final seenHashes = <String>{};
     for (final attachmentPath in attachmentPaths) {
-      final asset = await _importAsset(File(attachmentPath));
+      final asset = await _importAsset(
+        File(attachmentPath),
+        fallbackTime: localNow,
+      );
       body = InlineImage.persist(
         body,
         attachmentPath,
@@ -108,7 +113,6 @@ class VaultRepository {
       }
     }
 
-    final localNow = _now();
     final createdAt = localNow.toUtc();
     final id = _idGenerator().trim();
     if (id.isEmpty) {
@@ -167,6 +171,7 @@ class VaultRepository {
       final asset = await _importAsset(
         File(attachmentPath),
         relativeFrom: record.file.parent,
+        fallbackTime: persisted.createdAt,
       );
       body = InlineImage.persist(
         body,
@@ -258,7 +263,7 @@ class VaultRepository {
       if (entity is! File || p.extension(entity.path).toLowerCase() != '.md') {
         continue;
       }
-      final scrap = codec.decode(await entity.readAsString());
+      final scrap = await _readScrap(entity);
       if (scrap.id != id) {
         continue;
       }
@@ -270,9 +275,53 @@ class VaultRepository {
     return match;
   }
 
+  /// Backfill older vaults once, retaining the document's original timestamps.
+  Future<Scrap> _readScrap(File file) async {
+    final scrap = codec.decode(await file.readAsString());
+    final assets = <ScrapAsset>[];
+    var changed = false;
+    for (final asset in scrap.assets) {
+      if (asset.photoMetadataRead || !asset.mimeType.startsWith('image/')) {
+        assets.add(asset);
+        continue;
+      }
+      final source = File(
+        p.normalize(p.join(file.parent.path, asset.relativePath)),
+      );
+      if (!await source.exists()) {
+        // Sync may not have downloaded this asset yet. Retry on the next load.
+        assets.add(asset);
+        continue;
+      }
+      final location =
+          asset.location ??
+          await const PhotoLocationReader().read(
+            source,
+            fallbackTime: scrap.createdAt,
+          );
+      assets.add(asset.withPhotoMetadata(location));
+      changed = true;
+    }
+    if (!changed) return scrap;
+    final updated = Scrap(
+      id: scrap.id,
+      body: scrap.body,
+      createdAt: scrap.createdAt,
+      updatedAt: scrap.updatedAt,
+      localDate: scrap.localDate,
+      utcOffsetMinutes: scrap.utcOffsetMinutes,
+      timezoneName: scrap.timezoneName,
+      assets: List.unmodifiable(assets),
+      location: scrap.location,
+    );
+    await _atomicWrite(file, codec.encode(updated));
+    return updated;
+  }
+
   Future<ScrapAsset> _importAsset(
     File source, {
     Directory? relativeFrom,
+    required DateTime fallbackTime,
   }) async {
     if (!await source.exists()) {
       throw FileSystemException('Attachment does not exist.', source.path);
@@ -285,6 +334,10 @@ class VaultRepository {
       );
     }
 
+    final photoLocation = await const PhotoLocationReader().read(
+      source,
+      fallbackTime: fallbackTime,
+    );
     final optimized = await _imageOptimizer.optimize(source);
     final hash = optimized == null
         ? (await sha256.bind(source.openRead()).first).toString()
@@ -318,6 +371,8 @@ class VaultRepository {
       ),
       originalName: p.basename(source.path),
       mimeType: _mimeType(stored.path),
+      location: photoLocation,
+      photoMetadataRead: true,
     );
   }
 

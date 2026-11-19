@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:scrapnote/features/editor/inline_image.dart';
+import 'package:scrapnote/infrastructure/vault/photo_location_reader.dart';
+import '../../support/photo_fixture.dart';
 import 'package:scrapnote/infrastructure/sync/sync_manifest.dart';
 import 'package:scrapnote/infrastructure/sync/vault_sync_engine.dart';
 import 'package:scrapnote/infrastructure/vault/image_attachment_optimizer.dart';
@@ -24,7 +26,11 @@ class _MemoryRemote implements SyncRemote {
   Future<SyncManifest> readManifest() async => manifest;
 
   @override
-  Future<void> upload(String digest, Uint8List bytes) async {
+  Future<void> upload(
+    String digest,
+    Uint8List bytes, {
+    required String path,
+  }) async {
     blobs[digest] = bytes;
   }
 
@@ -249,6 +255,89 @@ void main() {
 
       expect(await optimizer.optimize(source), isNull);
       expect(await source.readAsBytes(), sourceBytes);
+    },
+  );
+
+  test(
+    'photo GPS survives import compression and reopening without source EXIF',
+    () async {
+      final source = await writePhoto(File('${sandbox.path}/gps.jpg'));
+      final repository = VaultRepository(
+        Directory('${sandbox.path}/vault'),
+        imageOptimizer: const ImageAttachmentOptimizer(
+          triggerBytes: 1,
+          maxDimension: 8,
+        ),
+      );
+      final saved = await repository.createScrap(
+        'Photo',
+        attachmentPaths: [source.path],
+      );
+      final asset = saved.assets.single;
+      final stored = File(
+        p.normalize(
+          p.join(repository.scrapsDirectory.path, asset.relativePath),
+        ),
+      );
+      expect(await stored.length(), lessThan(await source.length()));
+      expect(
+        await const PhotoLocationReader().read(
+          stored,
+          fallbackTime: saved.createdAt,
+        ),
+        isNull,
+      );
+      await source.delete();
+      expect(saved.locations.single.latitude, 37.5);
+      expect((await repository.listScraps()).single.locations, saved.locations);
+    },
+  );
+
+  test(
+    'legacy oversized photo keeps GPS when sync replaces its image',
+    () async {
+      final vault = Directory('${sandbox.path}/vault');
+      final source = await writePhoto(File('${sandbox.path}/gps.jpg'));
+      final repository = VaultRepository(vault);
+      final saved = await repository.createScrap(
+        'Photo',
+        attachmentPaths: [source.path],
+      );
+      // Mimic an old Markdown file that has not extracted photo metadata yet.
+      final document = (await repository.scrapsDirectory.list().toList())
+          .whereType<File>()
+          .single;
+      var markdown = await document.readAsString();
+      markdown = markdown.replaceAll(
+        RegExp(
+          r'    photo_metadata_read: true\n    location:\n(?:      [^\n]*\n)+',
+        ),
+        '',
+      );
+      await document.writeAsString(markdown);
+      final old = File(
+        p.normalize(
+          p.join(
+            repository.scrapsDirectory.path,
+            saved.assets.single.relativePath,
+          ),
+        ),
+      );
+      final limit = (await old.length()) - 1;
+      await OversizedImageMigrator(
+        vault,
+        maxBytes: limit,
+        maxDimension: 8,
+      ).migrate();
+      final loaded = (await repository.listScraps()).single;
+      expect(loaded.assets.single.hash, isNot(saved.assets.single.hash));
+      expect(loaded.locations.single.latitude, 37.5);
+      expect(
+        loaded.locations.single.capturedAt,
+        saved.locations.single.capturedAt,
+      );
+      expect(loaded.createdAt, saved.createdAt);
+      expect(loaded.updatedAt, saved.updatedAt);
     },
   );
 

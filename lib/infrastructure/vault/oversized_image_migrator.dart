@@ -8,6 +8,7 @@ import '../../features/editor/inline_image.dart';
 import 'front_matter_codec.dart';
 import 'image_attachment_optimizer.dart';
 import 'note_file_codec.dart';
+import 'photo_location_reader.dart';
 
 /// Repairs older, over-limit Vault attachments before a user-requested sync.
 /// Originals and changed documents remain recoverable in Vault trash.
@@ -136,7 +137,14 @@ class OversizedImageMigrator {
           );
           final updatedAssets = [
             for (final asset in scrap.assets)
-              _relinkAsset(asset, entity, original, replacement, newHash),
+              await _relinkAsset(
+                asset,
+                entity,
+                original,
+                replacement,
+                newHash,
+                fallbackTime: scrap.createdAt,
+              ),
           ];
           if (updatedBody != scrap.body ||
               !_sameAssets(updatedAssets, scrap.assets)) {
@@ -165,7 +173,14 @@ class OversizedImageMigrator {
           );
           final updatedAssets = [
             for (final asset in note.assets)
-              _relinkAsset(asset, entity, original, replacement, newHash),
+              await _relinkAsset(
+                asset,
+                entity,
+                original,
+                replacement,
+                newHash,
+                fallbackTime: note.createdAt,
+              ),
           ];
           if (updatedBody != note.body ||
               !_sameAssets(updatedAssets, note.assets)) {
@@ -194,13 +209,14 @@ class OversizedImageMigrator {
     return true;
   }
 
-  static ScrapAsset _relinkAsset(
+  static Future<ScrapAsset> _relinkAsset(
     ScrapAsset asset,
     File document,
     File original,
     File replacement,
-    String newHash,
-  ) {
+    String newHash, {
+    required DateTime fallbackTime,
+  }) async {
     final oldPath = p.normalize(
       p.join(document.parent.path, asset.relativePath),
     );
@@ -212,6 +228,13 @@ class OversizedImageMigrator {
           .replaceAll(r'\', '/'),
       originalName: asset.originalName,
       mimeType: replacement.path.endsWith('.jpg') ? 'image/jpeg' : 'image/png',
+      location:
+          asset.location ??
+          await const PhotoLocationReader().read(
+            original,
+            fallbackTime: fallbackTime,
+          ),
+      photoMetadataRead: true,
     );
   }
 

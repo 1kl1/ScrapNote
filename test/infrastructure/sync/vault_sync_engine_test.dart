@@ -23,7 +23,11 @@ class MemoryRemote implements SyncRemote {
   }
 
   @override
-  Future<void> upload(String digest, Uint8List bytes) async {
+  Future<void> upload(
+    String digest,
+    Uint8List bytes, {
+    required String path,
+  }) async {
     blobs[digest] = bytes;
   }
 

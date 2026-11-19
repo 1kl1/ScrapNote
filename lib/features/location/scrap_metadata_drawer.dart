@@ -16,6 +16,7 @@ class ScrapMetadataDrawer extends StatelessWidget {
   const ScrapMetadataDrawer({
     required this.scrap,
     this.locationSaving = false,
+    this.tileProvider,
     this.onRetryLocation,
     this.onSetManualLocation,
     this.onOpenLocationSettings,
@@ -24,6 +25,7 @@ class ScrapMetadataDrawer extends StatelessWidget {
 
   final Scrap? scrap;
   final bool locationSaving;
+  final TileProvider? tileProvider;
   final VoidCallback? onRetryLocation;
   final ValueChanged<ScrapLocation>? onSetManualLocation;
   final VoidCallback? onOpenLocationSettings;
@@ -91,47 +93,41 @@ class ScrapMetadataDrawer extends StatelessWidget {
                         const SizedBox(height: ScrapnoteTokens.space4),
                         const Divider(height: 1, color: ScrapnoteTokens.rule),
                         const SizedBox(height: ScrapnoteTokens.space4),
-                        if (current.location case final location?) ...<Widget>[
+                        if (current.locations.isNotEmpty) ...<Widget>[
                           SizedBox(
                             height: 240,
                             child: ClipRect(
-                              child: _LocationMap(location: location),
+                              child: _LocationMap(
+                                locations: current.locations,
+                                tileProvider: tileProvider,
+                              ),
                             ),
                           ),
                           const SizedBox(height: ScrapnoteTokens.space4),
-                          _MetadataRow(
-                            label: 'LATITUDE',
-                            value: location.latitude.toStringAsFixed(6),
-                          ),
-                          _MetadataRow(
-                            label: 'LONGITUDE',
-                            value: location.longitude.toStringAsFixed(6),
-                          ),
-                          _MetadataRow(
-                            label: 'ACCURACY',
-                            value: location.source == 'manual'
-                                ? '수동 지정'
-                                : '±${location.accuracyMeters.toStringAsFixed(0)} m',
-                          ),
-                          _MetadataRow(
-                            label: 'SOURCE',
-                            value: location.source == 'manual'
-                                ? 'Manual'
-                                : location.source,
-                          ),
-                          _MetadataRow(
-                            label: 'CAPTURED',
-                            value: _date(location.capturedAt),
-                          ),
-                          const SizedBox(height: ScrapnoteTokens.space2),
-                          _LocationActions(
-                            saving: locationSaving,
-                            onRetry: onRetryLocation,
-                            onManual: onSetManualLocation == null
-                                ? null
-                                : () => _openManualLocation(context, location),
-                            onOpenSettings: onOpenLocationSettings,
-                          ),
+                          if (current.locatedPhotos.isNotEmpty)
+                            for (final photo
+                                in current.locatedPhotos) ...<Widget>[
+                              _MetadataRow(
+                                label: 'PHOTO',
+                                value: photo.originalName,
+                              ),
+                              ..._locationRows(photo.location!),
+                            ]
+                          else ...<Widget>[
+                            ..._locationRows(current.locations.single),
+                            const SizedBox(height: ScrapnoteTokens.space2),
+                            _LocationActions(
+                              saving: locationSaving,
+                              onRetry: onRetryLocation,
+                              onManual: onSetManualLocation == null
+                                  ? null
+                                  : () => _openManualLocation(
+                                      context,
+                                      current.location,
+                                    ),
+                              onOpenSettings: onOpenLocationSettings,
+                            ),
+                          ],
                         ] else ...<Widget>[
                           const _NoLocationState(),
                           const SizedBox(height: ScrapnoteTokens.space4),
@@ -152,6 +148,34 @@ class ScrapMetadataDrawer extends StatelessWidget {
       ),
     );
   }
+
+  static List<Widget> _locationRows(ScrapLocation location) => [
+    _MetadataRow(
+      label: 'LATITUDE',
+      value: location.latitude.toStringAsFixed(6),
+    ),
+    _MetadataRow(
+      label: 'LONGITUDE',
+      value: location.longitude.toStringAsFixed(6),
+    ),
+    _MetadataRow(
+      label: 'ACCURACY',
+      value: location.source == 'manual'
+          ? '수동 지정'
+          : location.source == 'photo_exif' && location.accuracyMeters == 0
+          ? 'Not recorded'
+          : '±${location.accuracyMeters.toStringAsFixed(0)} m',
+    ),
+    _MetadataRow(
+      label: 'SOURCE',
+      value: location.source == 'photo_exif'
+          ? 'Photo metadata (EXIF)'
+          : location.source == 'manual'
+          ? 'Manual'
+          : location.source,
+    ),
+    _MetadataRow(label: 'CAPTURED', value: _date(location.capturedAt)),
+  ];
 
   static String _date(DateTime value) =>
       DateFormat('yyyy-MM-dd HH:mm:ss').format(value.toLocal());
@@ -187,33 +211,48 @@ class ScrapMetadataDrawer extends StatelessWidget {
 }
 
 class _LocationMap extends StatelessWidget {
-  const _LocationMap({required this.location});
+  const _LocationMap({required this.locations, this.tileProvider});
 
-  final ScrapLocation location;
+  final List<ScrapLocation> locations;
+  final TileProvider? tileProvider;
 
   @override
   Widget build(BuildContext context) {
-    final point = LatLng(location.latitude, location.longitude);
+    final points = locations
+        .map((location) => LatLng(location.latitude, location.longitude))
+        .toList();
     return FlutterMap(
-      options: MapOptions(initialCenter: point, initialZoom: 15),
+      options: MapOptions(
+        initialCenter: points.first,
+        initialZoom: 15,
+        initialCameraFit: points.toSet().length < 2
+            ? null
+            : CameraFit.bounds(
+                bounds: LatLngBounds.fromPoints(points),
+                padding: const EdgeInsets.all(40),
+                maxZoom: 15,
+              ),
+      ),
       children: <Widget>[
         TileLayer(
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.example.scrapnote',
+          tileProvider: tileProvider,
         ),
         MarkerLayer(
           markers: <Marker>[
-            Marker(
-              point: point,
-              width: 44,
-              height: 44,
-              child: const Icon(
-                FLucideIcons.mapPin,
-                color: ScrapnoteTokens.signalOrange,
-                size: 30,
-                semanticLabel: 'Saved location',
+            for (final point in points)
+              Marker(
+                point: point,
+                width: 44,
+                height: 44,
+                child: const Icon(
+                  FLucideIcons.mapPin,
+                  color: ScrapnoteTokens.signalOrange,
+                  size: 30,
+                  semanticLabel: 'Saved location',
+                ),
               ),
-            ),
           ],
         ),
         const RichAttributionWidget(

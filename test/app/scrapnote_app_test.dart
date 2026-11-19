@@ -24,8 +24,7 @@ import 'package:scrapnote/infrastructure/platform/window_close_guard.dart';
 import 'package:scrapnote/infrastructure/sync/sync_vault_summary.dart';
 import 'package:scrapnote/infrastructure/sync/vault_synchronizer.dart';
 import 'package:scrapnote/infrastructure/vault/vault_repository.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:yet_another_json_isolate/yet_another_json_isolate.dart';
+import 'package:scrapnote/infrastructure/sync/sync_client.dart';
 
 void main() {
   late Directory sandbox;
@@ -70,7 +69,7 @@ void main() {
     ExpenseController? expenses,
     ClipboardImageReader? readClipboard,
     ImagePathPicker? pickImages,
-    SupabaseClient? syncClient,
+    SyncClient? syncClient,
     VaultSynchronizer vaultSynchronizer = synchronizeVault,
     Size size = const Size(1200, 720),
   }) async {
@@ -454,12 +453,7 @@ void main() {
   ) async {
     final scrapController = controller(picker: () async => vaultDirectory.path);
     await tester.runAsync(scrapController.chooseVault);
-    final client = SupabaseClient(
-      'https://example.supabase.co',
-      'public-test-key',
-      isolate: _InlineJson(),
-      authOptions: const AuthClientOptions(autoRefreshToken: false),
-    );
+    final client = SyncClient('https://sync.example.com');
     addTearDown(client.dispose);
 
     await pumpApp(tester, scrapController: scrapController, syncClient: client);
@@ -499,18 +493,17 @@ void main() {
       await state.parent.create(recursive: true);
       await state.writeAsString('{}');
     });
-    final client = SupabaseClient(
-      'https://example.supabase.co',
-      'public-test-key',
-      isolate: _InlineJson(),
-      authOptions: const AuthClientOptions(autoRefreshToken: false),
+    final client = SyncClient(
+      'https://sync.example.com',
       httpClient: MockClient(
         (_) async => http.Response(
           jsonEncode({
             'access_token': 'fixture-access',
             'refresh_token': 'fixture-refresh',
             'token_type': 'bearer',
-            'expires_in': 3600,
+            'expires_at': DateTime.now()
+                .add(const Duration(days: 1))
+                .toIso8601String(),
             'user': {
               'id': 'test-user',
               'aud': 'authenticated',
@@ -595,18 +588,17 @@ void main() {
   ) async {
     final scrapController = controller(picker: () async => vaultDirectory.path);
     await tester.runAsync(scrapController.chooseVault);
-    final client = SupabaseClient(
-      'https://example.supabase.co',
-      'public-test-key',
-      isolate: _InlineJson(),
-      authOptions: const AuthClientOptions(autoRefreshToken: false),
+    final client = SyncClient(
+      'https://sync.example.com',
       httpClient: MockClient(
         (_) async => http.Response(
           jsonEncode({
             'access_token': 'fixture-access',
             'refresh_token': 'fixture-refresh',
             'token_type': 'bearer',
-            'expires_in': 3600,
+            'expires_at': DateTime.now()
+                .add(const Duration(days: 1))
+                .toIso8601String(),
             'user': {
               'id': 'test-user',
               'aud': 'authenticated',
@@ -663,12 +655,7 @@ void main() {
         picker: () async => vaultDirectory.path,
       );
       await tester.runAsync(scrapController.chooseVault);
-      final client = SupabaseClient(
-        'https://example.supabase.co',
-        'public-test-key',
-        isolate: _InlineJson(),
-        authOptions: const AuthClientOptions(autoRefreshToken: false),
-      );
+      final client = SyncClient('https://sync.example.com');
       addTearDown(client.dispose);
       await pumpApp(
         tester,
@@ -832,21 +819,6 @@ void main() {
   });
 }
 
-class _InlineJson extends YAJsonIsolate {
-  @override
-  Future<void> initialize() async {}
-
-  @override
-  Future<void> dispose() async {}
-
-  @override
-  Future<dynamic> decode(String value) async => jsonDecode(value);
-
-  @override
-  Future<String> encode(Object? value) async => jsonEncode(value);
-}
-
-// This test exercises sync triggers, not unrelated repository filesystem I/O.
 class _SyncTestNoteController extends NoteController {
   @override
   Future<void> connect(String vaultPath) async {}

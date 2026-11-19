@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:yaml/yaml.dart';
 
+import 'front_matter_codec.dart';
 import '../../domain/note.dart';
 import '../../domain/scrap.dart';
 
@@ -35,6 +36,7 @@ class NoteFileCodec {
           ..writeln('    relative_path: ${jsonEncode(asset.relativePath)}')
           ..writeln('    original_name: ${jsonEncode(asset.originalName)}')
           ..writeln('    mime_type: ${jsonEncode(asset.mimeType)}');
+        ScrapFileCodec.writeAssetMetadata(buffer, asset);
       }
     }
     buffer
@@ -118,6 +120,8 @@ class NoteFileCodec {
           relativePath: _string(entry, 'relative_path'),
           originalName: _string(entry, 'original_name'),
           mimeType: _string(entry, 'mime_type'),
+          location: ScrapFileCodec.readLocation(entry['location']),
+          photoMetadataRead: entry['photo_metadata_read'] == true,
         );
       }),
     );

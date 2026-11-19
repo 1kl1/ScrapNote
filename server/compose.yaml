@@ -1,0 +1,42 @@
+services:
+  api:
+    image: scrapnote-api:1.0.0
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      - SERVICE_FQDN_API_8080
+      - PORT=8080
+      - DATABASE_URL=postgresql://scrapnote:${POSTGRES_PASSWORD}@database:5432/scrapnote
+      - INITIAL_EMAIL=${INITIAL_EMAIL}
+      - INITIAL_PASSWORD=${INITIAL_PASSWORD}
+      - ZIPLINE_URL=${ZIPLINE_URL}
+      - ZIPLINE_TOKEN=${ZIPLINE_TOKEN}
+      - ZIPLINE_PASSWORD_KEY=${ZIPLINE_PASSWORD_KEY}
+    expose:
+      - '8080'
+    depends_on:
+      database:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+  database:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=scrapnote
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=scrapnote
+    volumes:
+      - scrapnote_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U scrapnote -d scrapnote']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+volumes:
+  scrapnote_postgres:

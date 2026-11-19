@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
+import 'mobile_vault_migration.dart';
 
 /// Owns the platform boundary for choosing and restoring the user's Vault.
 ///
@@ -28,8 +28,7 @@ class VaultAccess {
 
   Future<String> _mobileDirectory() async {
     final support = await getApplicationSupportDirectory();
-    final directory = Directory(path.join(support.path, 'vault'));
-    await directory.create(recursive: true);
+    final directory = await resolveMobileVaultDirectory(support);
     return directory.path;
   }
 

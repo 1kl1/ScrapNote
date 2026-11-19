@@ -12,7 +12,7 @@ abstract interface class SyncRemote {
   /// Includes the server and authenticated user; prevents cross-account uploads.
   String get identity;
   Future<SyncManifest> readManifest();
-  Future<void> upload(String digest, Uint8List bytes);
+  Future<void> upload(String digest, Uint8List bytes, {required String path});
   Future<Uint8List> download(String digest);
   Future<void> commit(int expectedRevision, Map<String, String> entries);
 }
@@ -81,7 +81,7 @@ class VaultSyncEngine {
               'File changed during sync or exceeds 25 MB.',
             );
           }
-          await remote.upload(entry.value, bytes);
+          await remote.upload(entry.value, bytes, path: entry.key);
         }
         if (local[entry.key] != entry.value) {
           final bytes = await remote.download(entry.value);

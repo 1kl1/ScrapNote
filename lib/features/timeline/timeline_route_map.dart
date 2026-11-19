@@ -12,22 +12,44 @@ class TimelineRouteMap extends StatelessWidget {
   final List<Scrap> scraps;
   final TileProvider? tileProvider;
 
-  static List<Scrap> locatedScraps(Iterable<Scrap> scraps) =>
-      scraps.where((s) {
-        final location = s.location;
-        return location != null &&
-            location.latitude.isFinite &&
-            location.longitude.isFinite &&
-            location.latitude.abs() <= 90 &&
-            location.longitude.abs() <= 180;
-      }).toList()..sort((a, b) {
-        final order = a.createdAt.compareTo(b.createdAt);
-        return order == 0 ? a.id.compareTo(b.id) : order;
-      });
+  static List<TimelineLocation> routeLocations(Iterable<Scrap> scraps) {
+    final entries = <TimelineLocation>[];
+    for (final scrap in scraps) {
+      final photos = scrap.locatedPhotos;
+      if (photos.isNotEmpty) {
+        entries.addAll(
+          photos.map(
+            (photo) => TimelineLocation(
+              scrap: scrap,
+              location: photo.location!,
+              photoName: photo.originalName,
+            ),
+          ),
+        );
+      } else if (scrap.locations.isNotEmpty) {
+        entries.add(
+          TimelineLocation(scrap: scrap, location: scrap.locations.single),
+        );
+      }
+    }
+    entries.sort((a, b) {
+      final order = a.time.compareTo(b.time);
+      if (order != 0) return order;
+      final byScrap = a.scrap.id.compareTo(b.scrap.id);
+      return byScrap != 0
+          ? byScrap
+          : (a.photoName ?? '').compareTo(b.photoName ?? '');
+    });
+    return entries;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final located = locatedScraps(scraps);
+    final located = routeLocations(scraps);
+    final locatedScrapCount = located
+        .map((entry) => entry.scrap.id)
+        .toSet()
+        .length;
     if (located.isEmpty) {
       return const Center(
         child: Padding(
@@ -40,7 +62,9 @@ class TimelineRouteMap extends StatelessWidget {
       );
     }
     final points = located
-        .map((s) => LatLng(s.location!.latitude, s.location!.longitude))
+        .map(
+          (entry) => LatLng(entry.location.latitude, entry.location.longitude),
+        )
         .toList();
     final distinct = points.toSet();
     return Column(
@@ -49,7 +73,7 @@ class TimelineRouteMap extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.all(12),
           child: Text(
-            '${located.length} locations · Capture order${scraps.length > located.length ? ' · ${scraps.length - located.length} without location' : ''}',
+            '${located.length} locations · Capture order${scraps.length > locatedScrapCount ? ' · ${scraps.length - locatedScrapCount} without location' : ''}',
             style: const TextStyle(fontSize: 12),
           ),
         ),
@@ -95,7 +119,7 @@ class TimelineRouteMap extends StatelessWidget {
                         height: 36,
                         child: Tooltip(
                           message:
-                              '${i + 1}. ${located[i].firstLineTitle}\n${DateFormat('HH:mm').format(_wallClock(located[i]))}',
+                              '${i + 1}. ${located[i].scrap.firstLineTitle}${located[i].photoName == null ? '' : '\n${located[i].photoName}'}\n${DateFormat('HH:mm').format(_wallClock(located[i]))}',
                           child: DecoratedBox(
                             decoration: BoxDecoration(
                               color: ScrapnoteTokens.signalOrange,
@@ -137,7 +161,24 @@ class TimelineRouteMap extends StatelessWidget {
     );
   }
 
-  static DateTime _wallClock(Scrap scrap) => scrap.utcOffsetMinutes == null
-      ? scrap.createdAt.toLocal()
-      : scrap.createdAt.toUtc().add(Duration(minutes: scrap.utcOffsetMinutes!));
+  static DateTime _wallClock(TimelineLocation entry) =>
+      entry.scrap.utcOffsetMinutes == null
+      ? entry.time.toLocal()
+      : entry.time.toUtc().add(
+          Duration(minutes: entry.scrap.utcOffsetMinutes!),
+        );
+}
+
+class TimelineLocation {
+  const TimelineLocation({
+    required this.scrap,
+    required this.location,
+    this.photoName,
+  });
+
+  final Scrap scrap;
+  final ScrapLocation location;
+  final String? photoName;
+  DateTime get time =>
+      photoName == null ? scrap.createdAt : location.capturedAt;
 }

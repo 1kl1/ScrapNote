@@ -39,6 +39,7 @@ class ScrapFileCodec {
           ..writeln('    relative_path: ${_quoted(asset.relativePath)}')
           ..writeln('    original_name: ${_quoted(asset.originalName)}')
           ..writeln('    mime_type: ${_quoted(asset.mimeType)}');
+        writeAssetMetadata(buffer, asset);
       }
     }
 
@@ -97,7 +98,7 @@ class ScrapFileCodec {
       utcOffsetMinutes: _optionalUtcOffsetMinutes(map, 'utc_offset_minutes'),
       timezoneName: _optionalString(map, 'timezone_name'),
       assets: _assets(map['assets']),
-      location: _location(map['location']),
+      location: readLocation(map['location']),
     );
   }
 
@@ -270,12 +271,30 @@ class ScrapFileCodec {
           relativePath: _requiredString(entry, 'relative_path'),
           originalName: _requiredString(entry, 'original_name'),
           mimeType: _requiredString(entry, 'mime_type'),
+          location: readLocation(entry['location']),
+          photoMetadataRead: entry['photo_metadata_read'] == true,
         );
       }),
     );
   }
 
-  static ScrapLocation? _location(Object? value) {
+  /// Shared with Notes so copied assets retain their original photo metadata.
+  static void writeAssetMetadata(StringBuffer buffer, ScrapAsset asset) {
+    if (asset.photoMetadataRead) {
+      buffer.writeln('    photo_metadata_read: true');
+    }
+    final location = asset.location;
+    if (location == null) return;
+    buffer
+      ..writeln('    location:')
+      ..writeln('      latitude: ${location.latitude}')
+      ..writeln('      longitude: ${location.longitude}')
+      ..writeln('      accuracy_meters: ${location.accuracyMeters}')
+      ..writeln('      source: ${_quoted(location.source)}')
+      ..writeln('      captured_at: ${_quoted(_date(location.capturedAt))}');
+  }
+
+  static ScrapLocation? readLocation(Object? value) {
     if (value == null) {
       return null;
     }
@@ -288,17 +307,17 @@ class ScrapFileCodec {
     final latitude = _requiredDouble(value, 'latitude');
     final longitude = _requiredDouble(value, 'longitude');
     final accuracy = _requiredDouble(value, 'accuracy_meters');
-    if (latitude < -90 || latitude > 90) {
+    if (!latitude.isFinite || latitude < -90 || latitude > 90) {
       throw const FormatException(
         'Location latitude must be between -90 and 90.',
       );
     }
-    if (longitude < -180 || longitude > 180) {
+    if (!longitude.isFinite || longitude < -180 || longitude > 180) {
       throw const FormatException(
         'Location longitude must be between -180 and 180.',
       );
     }
-    if (accuracy < 0) {
+    if (!accuracy.isFinite || accuracy < 0) {
       throw const FormatException('Location accuracy cannot be negative.');
     }
 

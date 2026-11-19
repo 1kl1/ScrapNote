@@ -3,7 +3,7 @@
 
 import 'dart:async';
 import 'dart:io';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:scrapnote/infrastructure/sync/sync_client.dart';
 import '../features/sync/sync_account_page.dart';
 import '../infrastructure/sync/sync_manifest.dart';
 import '../infrastructure/sync/vault_synchronizer.dart';
@@ -60,7 +60,7 @@ class ScrapnoteApp extends StatelessWidget {
   });
 
   final ScrapController? controller;
-  final SupabaseClient? syncClient;
+  final SyncClient? syncClient;
   final EditorSessionController? editorSessionController;
   final NoteController? noteController;
   final ExpenseController? expenseController;
@@ -119,7 +119,7 @@ class ScrapnoteWorkspace extends StatefulWidget {
   });
 
   final ScrapController? controller;
-  final SupabaseClient? syncClient;
+  final SyncClient? syncClient;
   final EditorSessionController? editorSessionController;
   final NoteController? noteController;
   final ExpenseController? expenseController;

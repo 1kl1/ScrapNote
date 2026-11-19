@@ -7,11 +7,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:forui/forui.dart';
 import 'package:intl/intl.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:scrapnote/infrastructure/sync/sync_client.dart';
 
 import '../../app/scrapnote_theme.dart';
 import '../../infrastructure/sync/sync_manifest.dart';
-import '../../infrastructure/sync/sync_bootstrap.dart';
 import '../../infrastructure/sync/sync_vault_summary.dart';
 import '../../core/design/scrapnote_tokens.dart';
 
@@ -24,7 +23,7 @@ class SyncAccountPage extends StatefulWidget {
     this.summaryLoader = loadSyncVaultSummary,
     super.key,
   });
-  final SupabaseClient client;
+  final SyncClient client;
   final Future<String> Function(Map<String, SyncResolution>) onSync;
   final String status;
   final String vaultPath;
@@ -36,9 +35,11 @@ class SyncAccountPage extends StatefulWidget {
 class _SyncAccountPageState extends State<SyncAccountPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
-  StreamSubscription<AuthState>? _authSubscription;
-  int _resendSeconds = 0;
-  Timer? _resendTimer;
+  final _currentPassword = TextEditingController();
+  final _newPassword = TextEditingController();
+  final _confirmPassword = TextEditingController();
+  bool _changingPassword = false;
+  StreamSubscription<SyncAuthState>? _authSubscription;
   bool _busy = false;
   late String _status = widget.status;
   List<SyncConflict> _conflicts = [];
@@ -51,8 +52,10 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
   void dispose() {
     _email.dispose();
     _password.dispose();
+    _currentPassword.dispose();
+    _newPassword.dispose();
+    _confirmPassword.dispose();
     _authSubscription?.cancel();
-    _resendTimer?.cancel();
     super.dispose();
   }
 
@@ -66,7 +69,7 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
       _resolutions.clear();
       _status =
           '같은 파일이 양쪽에서 바뀌었습니다. 사용할 내용을 선택해 주세요. 삭제와 수정이 겹친 경우도 여기에 표시됩니다.';
-    } on AuthException catch (error) {
+    } on SyncAuthException catch (error) {
       _status = _authErrorMessage(error);
     } on Exception {
       _status = '연결하지 못했습니다. 인터넷 연결과 계정 상태를 확인한 뒤 다시 시도해 주세요. 기기의 파일은 유지됩니다.';
@@ -102,44 +105,39 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
     return false;
   }
 
-  void _startResendCooldown() {
-    _resendTimer?.cancel();
-    _resendSeconds = 60;
-    _resendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      setState(() => _resendSeconds--);
-      if (_resendSeconds == 0) timer.cancel();
-    });
+  void _clearPasswordFields() {
+    _currentPassword.clear();
+    _newPassword.clear();
+    _confirmPassword.clear();
   }
 
-  Future<void> _resendConfirmation() async {
-    if (!_checkEmail() || _resendSeconds > 0) return;
-    await _run(() async {
-      await widget.client.auth.resend(
-        type: OtpType.signup,
-        email: _email.text.trim(),
-        emailRedirectTo: SyncBootstrap.authRedirectUrl,
-      );
-      _startResendCooldown();
-      _status =
-          '인증 메일을 요청했습니다. 가장 최근 메일의 링크를 열어 주세요. 이미 인증했다면 비밀번호로 로그인할 수 있습니다.';
-    });
+  void _changePassword() {
+    if (_currentPassword.text.isEmpty) {
+      setState(() => _status = '현재 비밀번호를 입력해 주세요.');
+      return;
+    }
+    if (_newPassword.text.length < 16 || _newPassword.text.length > 1024) {
+      setState(() => _status = '새 비밀번호는 16자 이상 1024자 이하여야 합니다.');
+      return;
+    }
+    if (_newPassword.text != _confirmPassword.text) {
+      setState(() => _status = '새 비밀번호가 일치하지 않습니다.');
+      return;
+    }
+    unawaited(
+      _run(() async {
+        await widget.client.auth.changePassword(
+          currentPassword: _currentPassword.text,
+          newPassword: _newPassword.text,
+        );
+        _clearPasswordFields();
+        _changingPassword = false;
+        _status = '비밀번호를 변경했습니다. 기존 로그인 세션은 유지됩니다.';
+      }),
+    );
   }
 
-  String _authErrorMessage(AuthException error) => switch (error.code) {
-    'email_not_confirmed' => '이메일 인증이 필요합니다. 아래에서 인증 메일을 다시 받을 수 있습니다.',
-    'otp_expired' =>
-      '인증 링크가 이미 사용되었거나 만료되었습니다. 먼저 로그인을 시도하고, 인증이 필요하면 메일을 다시 받아 주세요.',
-    'over_email_send_rate_limit' ||
-    'over_request_rate_limit' => '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.',
-    'invalid_credentials' => '이메일 또는 비밀번호가 맞지 않습니다. 입력 내용을 확인해 주세요.',
-    'flow_state_not_found' || 'flow_state_expired' || 'bad_code_verifier' =>
-      '이메일을 확인했다면 가입한 비밀번호로 로그인해 주세요. 인증 링크는 가입을 시작한 기기에서 열어 주세요.',
-    _ => error.message,
-  };
+  String _authErrorMessage(SyncAuthException error) => error.message;
 
   @override
   void initState() {
@@ -148,7 +146,7 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
     _authSubscription = widget.client.auth.onAuthStateChange.listen(
       (state) {
         if (!mounted) return;
-        final signedIn = state.event == AuthChangeEvent.signedIn;
+        final signedIn = state.event == SyncAuthEvent.signedIn;
         setState(() {
           if (signedIn) {
             _password.clear();
@@ -160,7 +158,7 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
       onError: (Object error, StackTrace stackTrace) {
         if (!mounted) return;
         setState(
-          () => _status = error is AuthException
+          () => _status = error is SyncAuthException
               ? _authErrorMessage(error)
               : '인증 결과를 확인하지 못했습니다. 가입한 비밀번호로 로그인을 시도해 주세요.',
         );
@@ -243,52 +241,14 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                         child: const Text('로그인'),
                       ),
                       const SizedBox(height: 12),
-                      FButton(
-                        variant: FButtonVariant.outline,
-                        onPress: _busy
-                            ? null
-                            : () {
-                                if (!_checkEmail()) return;
-                                unawaited(
-                                  _run(() async {
-                                    final response = await widget.client.auth
-                                        .signUp(
-                                          emailRedirectTo:
-                                              SyncBootstrap.authRedirectUrl,
-                                          email: _email.text.trim(),
-                                          password: _password.text,
-                                        );
-                                    _password.clear();
-                                    if (response.session == null) {
-                                      _startResendCooldown();
-                                    }
-                                    _status = response.session == null
-                                        ? '가장 최근 인증 메일의 링크를 이 기기에서 열어 주세요. Scrapnote로 돌아와 로그인을 마칠 수 있습니다. 이미 인증했다면 비밀번호로 로그인하세요.'
-                                        : '로그인했습니다. 저장하고 동기화를 눌러 주세요.';
-                                  }),
-                                );
-                              },
-                        child: const Text('계정 만들기'),
-                      ),
-                      const SizedBox(height: 12),
-                      FButton(
-                        variant: FButtonVariant.ghost,
-                        onPress: _busy || _resendSeconds > 0
-                            ? null
-                            : _resendConfirmation,
-                        child: Text(
-                          _resendSeconds > 0
-                              ? '$_resendSeconds초 후 재발송'
-                              : '인증 메일 다시 받기',
-                        ),
-                      ),
+                      const Text('개인 서버에 등록된 계정으로 로그인하세요.'),
                     ] else ...[
                       _SectionHeading(
                         icon: FLucideIcons.userRound,
                         title: '로그인 세션',
                       ),
-                      _DetailRow(label: '이메일', value: user.email ?? '기록 없음'),
-                      _DetailRow(label: '로그인 방식', value: _provider(user)),
+                      _DetailRow(label: '이메일', value: user.email),
+                      _DetailRow(label: '로그인 방식', value: '이메일 · 개인 서버'),
                       _DetailRow(
                         label: '계정 생성',
                         value: _dateString(user.createdAt),
@@ -303,6 +263,59 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                           widget.client.auth.currentSession,
                         ),
                       ),
+                      const SizedBox(height: 16),
+                      if (!_changingPassword)
+                        FButton(
+                          variant: FButtonVariant.outline,
+                          onPress: _busy
+                              ? null
+                              : () => setState(() => _changingPassword = true),
+                          child: const Text('비밀번호 변경'),
+                        )
+                      else ...[
+                        FTextField.password(
+                          key: const ValueKey('current-password'),
+                          label: const Text('현재 비밀번호'),
+                          control: FTextFieldControl.managed(
+                            controller: _currentPassword,
+                          ),
+                          enabled: !_busy,
+                        ),
+                        const SizedBox(height: 12),
+                        FTextField.password(
+                          key: const ValueKey('new-password'),
+                          label: const Text('새 비밀번호 (16자 이상)'),
+                          control: FTextFieldControl.managed(
+                            controller: _newPassword,
+                          ),
+                          enabled: !_busy,
+                        ),
+                        const SizedBox(height: 12),
+                        FTextField.password(
+                          key: const ValueKey('confirm-password'),
+                          label: const Text('새 비밀번호 확인'),
+                          control: FTextFieldControl.managed(
+                            controller: _confirmPassword,
+                          ),
+                          enabled: !_busy,
+                        ),
+                        const SizedBox(height: 12),
+                        FButton(
+                          onPress: _busy ? null : _changePassword,
+                          child: const Text('변경 저장'),
+                        ),
+                        const SizedBox(height: 8),
+                        FButton(
+                          variant: FButtonVariant.outline,
+                          onPress: _busy
+                              ? null
+                              : () => setState(() {
+                                  _clearPasswordFields();
+                                  _changingPassword = false;
+                                }),
+                          child: const Text('취소'),
+                        ),
+                      ],
                       const SizedBox(height: 24),
                       _SectionHeading(
                         icon: FLucideIcons.folderSync,
@@ -370,9 +383,9 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                         onPress: _busy
                             ? null
                             : () => _run(() async {
-                                await widget.client.auth.signOut(
-                                  scope: SignOutScope.local,
-                                );
+                                await widget.client.auth.signOut();
+                                _clearPasswordFields();
+                                _changingPassword = false;
                                 _conflicts = [];
                                 _resolutions.clear();
                                 _status =
@@ -425,18 +438,8 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
     );
   }
 
-  static String _provider(User user) {
-    final provider = user.appMetadata['provider'];
-    return provider is String && provider.isNotEmpty ? provider : '이메일';
-  }
-
-  static String _sessionExpiry(Session? session) {
-    final expiresAt = session?.expiresAt;
-    if (expiresAt == null) return '확인할 수 없음';
-    return _date(
-      DateTime.fromMillisecondsSinceEpoch(expiresAt * 1000).toLocal(),
-    );
-  }
+  static String _sessionExpiry(SyncSession? session) =>
+      session == null ? '확인할 수 없음' : _date(session.expiresAt.toLocal());
 
   static String _dateString(String? value) {
     final parsed = value == null ? null : DateTime.tryParse(value);

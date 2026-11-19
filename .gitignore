@@ -43,3 +43,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local migration credentials and private vault exports
+/.migration/
+**/__pycache__/
+/server/node_modules/
+/server/.env*
+!/server/.env.example

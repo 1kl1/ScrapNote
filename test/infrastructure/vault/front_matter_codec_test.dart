@@ -1,9 +1,65 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:scrapnote/domain/scrap.dart';
+import 'package:scrapnote/domain/note.dart';
+import 'package:scrapnote/infrastructure/vault/note_file_codec.dart';
 import 'package:scrapnote/infrastructure/vault/front_matter_codec.dart';
 
 void main() {
   const codec = ScrapFileCodec();
+
+  test(
+    'Scrap and Note codecs retain per-photo metadata including scanned GPS-less photos',
+    () {
+      final time = DateTime.utc(2026, 11, 18);
+      final assets = [
+        ScrapAsset(
+          hash: 'a' * 64,
+          relativePath: '../a.jpg',
+          originalName: 'a.jpg',
+          mimeType: 'image/jpeg',
+          photoMetadataRead: true,
+          location: ScrapLocation(
+            latitude: 37.5,
+            longitude: 127,
+            accuracyMeters: 0,
+            source: 'photo_exif',
+            capturedAt: time,
+          ),
+        ),
+        ScrapAsset(
+          hash: 'b' * 64,
+          relativePath: '../b.jpg',
+          originalName: 'b.jpg',
+          mimeType: 'image/jpeg',
+          photoMetadataRead: true,
+        ),
+      ];
+      final scrap = Scrap(
+        id: 'photos',
+        body: 'Photos',
+        createdAt: time,
+        updatedAt: time,
+        assets: assets,
+      );
+      expect(codec.decode(codec.encode(scrap)), scrap);
+      const noteCodec = NoteFileCodec();
+      final note = Note(
+        id: 'note',
+        body: 'Photos',
+        folder: '',
+        filePath: '/note.md',
+        createdAt: time,
+        updatedAt: time,
+        assets: assets,
+      );
+      expect(
+        noteCodec
+            .decode(noteCodec.encode(note), filePath: note.filePath)
+            .assets,
+        assets,
+      );
+    },
+  );
 
   test('round-trips all scrap fields and preserves Markdown body', () {
     final scrap = Scrap(

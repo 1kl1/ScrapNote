@@ -2,6 +2,54 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:scrapnote/domain/scrap.dart';
 
 void main() {
+  test(
+    'photo positions match encoded Markdown paths and exclude removed assets',
+    () {
+      final time = DateTime.utc(2026, 11, 18);
+      final photoLocation = ScrapLocation(
+        latitude: 37,
+        longitude: 127,
+        accuracyMeters: 0,
+        source: 'photo_exif',
+        capturedAt: time,
+      );
+      final fallback = ScrapLocation(
+        latitude: 51,
+        longitude: 1,
+        accuracyMeters: 10,
+        source: 'device',
+        capturedAt: time,
+      );
+      final scrap = Scrap(
+        id: 'photos',
+        body: '![photo](../a%20photo.jpg "center:50")',
+        createdAt: time,
+        updatedAt: time,
+        location: fallback,
+        assets: [
+          ScrapAsset(
+            hash: 'a',
+            relativePath: '../a photo.jpg',
+            originalName: 'a photo.jpg',
+            mimeType: 'image/jpeg',
+            location: photoLocation,
+          ),
+          ScrapAsset(
+            hash: 'b',
+            relativePath: '../removed.jpg',
+            originalName: 'removed.jpg',
+            mimeType: 'image/jpeg',
+            location: photoLocation,
+          ),
+        ],
+      );
+      expect(scrap.locatedPhotos.map((asset) => asset.originalName), [
+        'a photo.jpg',
+      ]);
+      expect(scrap.locations, [photoLocation]);
+    },
+  );
+
   group('Scrap.firstLineTitle', () {
     test('returns the first non-empty trimmed line', () {
       final scrap = Scrap(

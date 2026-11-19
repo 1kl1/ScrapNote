@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:scrapnote/domain/scrap.dart';
 import 'package:scrapnote/infrastructure/vault/front_matter_codec.dart';
 import 'package:scrapnote/infrastructure/vault/vault_repository.dart';
+import '../../support/photo_fixture.dart';
 
 void main() {
   late Directory temporaryDirectory;
@@ -21,6 +22,127 @@ void main() {
       await temporaryDirectory.delete(recursive: true);
     }
   });
+
+  final captured = ScrapLocation(
+    latitude: 51,
+    longitude: 1,
+    accuracyMeters: 10,
+    source: 'device',
+    capturedAt: DateTime.utc(2026, 11, 18),
+  );
+
+  test(
+    'uses all photo positions and falls back only after the last GPS photo is removed',
+    () async {
+      final first = await writePhoto(
+        File('${temporaryDirectory.path}/first.jpg'),
+      );
+      final second = await writePhoto(
+        File('${temporaryDirectory.path}/second.jpg'),
+        latitude: 38,
+      );
+      final plain = await writePhoto(
+        File('${temporaryDirectory.path}/plain.jpg'),
+        gps: false,
+      );
+      final repository = VaultRepository(
+        Directory('${temporaryDirectory.path}/vault'),
+      );
+      final saved = await repository.createScrap(
+        'Photos',
+        attachmentPaths: [first.path, second.path, plain.path],
+        location: captured,
+      );
+      expect(saved.locations.map((location) => location.latitude), [
+        37.5,
+        38.5,
+      ]);
+      expect(saved.location, captured);
+      expect(saved.locatedPhotos, hasLength(2));
+      expect((await repository.listScraps()).single, saved);
+
+      final remaining = saved.assets[1];
+      final edited = await repository.updateScrap(
+        saved,
+        '![second](${remaining.relativePath})',
+      );
+      expect(edited.locations.map((location) => location.latitude), [38.5]);
+      final removed = await repository.updateScrap(edited, 'No photos now');
+      expect(removed.locations, [captured]);
+      expect(removed.location?.capturedAt, captured.capturedAt);
+    },
+  );
+
+  test(
+    'no photos or photos without GPS use the original device position',
+    () async {
+      final repository = VaultRepository(
+        Directory('${temporaryDirectory.path}/vault'),
+      );
+      final plain = await writePhoto(
+        File('${temporaryDirectory.path}/plain.jpg'),
+        gps: false,
+      );
+      final text = await repository.createScrap('Text', location: captured);
+      final image = await repository.createScrap(
+        'Image',
+        attachmentPaths: [plain.path],
+        location: captured,
+      );
+      expect(text.locations, [captured]);
+      expect(image.locations, [captured]);
+      final withoutDevice = await repository.createScrap(
+        'Image without permission',
+        attachmentPaths: [plain.path],
+      );
+      expect(withoutDevice.locations, isEmpty);
+    },
+  );
+
+  test(
+    'backfills legacy photo GPS once without changing body or timestamps',
+    () async {
+      final repository = VaultRepository(
+        Directory('${temporaryDirectory.path}/vault'),
+      );
+      final photo = await writePhoto(
+        File('${temporaryDirectory.path}/photo.jpg'),
+      );
+      final saved = await repository.createScrap(
+        'Legacy',
+        attachmentPaths: [photo.path],
+        location: captured,
+      );
+      final file = (await repository.scrapsDirectory.list().toList())
+          .whereType<File>()
+          .single;
+      final asset = saved.assets.single;
+      final legacy = Scrap(
+        id: saved.id,
+        body: saved.body,
+        createdAt: saved.createdAt,
+        updatedAt: saved.updatedAt,
+        location: captured,
+        assets: [
+          ScrapAsset(
+            hash: asset.hash,
+            relativePath: asset.relativePath,
+            originalName: asset.originalName,
+            mimeType: asset.mimeType,
+          ),
+        ],
+      );
+      await file.writeAsString(const ScrapFileCodec().encode(legacy));
+      final loaded = (await repository.listScraps()).single;
+      expect(loaded.locations.single.latitude, 37.5);
+      expect(loaded.body, legacy.body);
+      expect(loaded.createdAt, legacy.createdAt);
+      expect(loaded.updatedAt, legacy.updatedAt);
+      expect(loaded.assets.single.photoMetadataRead, isTrue);
+      expect(const ScrapFileCodec().decode(await file.readAsString()), loaded);
+      expect((await repository.listScraps()).single, loaded);
+    },
+  );
 
   test(
     'initialize creates the canonical scrap and asset directories',

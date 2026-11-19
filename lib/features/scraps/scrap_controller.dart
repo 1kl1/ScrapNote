@@ -157,6 +157,8 @@ class ScrapController extends ChangeNotifier {
           ? await _repository!.createScrap(
               body,
               attachmentPaths: attachments,
+              // Keep the creation-time position as a fallback if GPS photos
+              // are absent now or removed later. Maps prefer photo metadata.
               location: await _locationProvider(),
             )
           : await _repository!.updateScrap(

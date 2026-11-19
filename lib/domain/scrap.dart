@@ -29,7 +29,36 @@ class Scrap {
   /// Platform-provided time-zone name at capture time, for example `KST`.
   final String? timezoneName;
   final List<ScrapAsset> assets;
+
+  /// Device location saved at creation, used only when no photo has GPS.
   final ScrapLocation? location;
+
+  /// Only images still referenced in the document contribute locations.
+  List<ScrapAsset> get locatedPhotos {
+    final paths = RegExp(r'!\[(?:\\.|[^\]])*\]\(([^\s)]+)')
+        .allMatches(body)
+        .map((match) => Uri.tryParse(match.group(1)!))
+        .whereType<Uri>()
+        .map((uri) => Uri.decodeComponent(uri.path))
+        .toSet();
+    return List.unmodifiable(
+      assets.where(
+        (asset) =>
+            asset.mimeType.startsWith('image/') &&
+            asset.location?.isValid == true &&
+            paths.contains(asset.relativePath),
+      ),
+    );
+  }
+
+  /// Photo GPS takes precedence over the single capture-time fallback.
+  List<ScrapLocation> get locations {
+    final photos = locatedPhotos;
+    if (photos.isNotEmpty) {
+      return List.unmodifiable(photos.map((asset) => asset.location!));
+    }
+    return location?.isValid == true ? [location!] : const [];
+  }
 
   /// A date-only value for grouping this scrap on the timeline.
   ///
@@ -130,6 +159,8 @@ class ScrapAsset {
     required this.relativePath,
     required this.originalName,
     required this.mimeType,
+    this.location,
+    this.photoMetadataRead = false,
   });
 
   /// Lower-case hexadecimal SHA-256 digest of the original bytes.
@@ -139,6 +170,19 @@ class ScrapAsset {
   final String relativePath;
   final String originalName;
   final String mimeType;
+  final ScrapLocation? location;
+
+  /// Distinguishes scanned photos without GPS from older, unscanned assets.
+  final bool photoMetadataRead;
+
+  ScrapAsset withPhotoMetadata(ScrapLocation? value) => ScrapAsset(
+    hash: hash,
+    relativePath: relativePath,
+    originalName: originalName,
+    mimeType: mimeType,
+    location: value,
+    photoMetadataRead: true,
+  );
 
   @override
   bool operator ==(Object other) {
@@ -147,14 +191,23 @@ class ScrapAsset {
             hash == other.hash &&
             relativePath == other.relativePath &&
             originalName == other.originalName &&
-            mimeType == other.mimeType;
+            mimeType == other.mimeType &&
+            location == other.location &&
+            photoMetadataRead == other.photoMetadataRead;
   }
 
   @override
-  int get hashCode => Object.hash(hash, relativePath, originalName, mimeType);
+  int get hashCode => Object.hash(
+    hash,
+    relativePath,
+    originalName,
+    mimeType,
+    location,
+    photoMetadataRead,
+  );
 }
 
-/// The one-shot location captured when a scrap was saved.
+/// A photo GPS position or the device position captured when a scrap was saved.
 class ScrapLocation {
   const ScrapLocation({
     required this.latitude,
@@ -168,9 +221,17 @@ class ScrapLocation {
   final double longitude;
   final double accuracyMeters;
 
-  /// A stable source value such as `core_location` or `manual`.
+  /// A stable source value such as `photo_exif`, `core_location`, or `manual`.
   final String source;
   final DateTime capturedAt;
+
+  bool get isValid =>
+      latitude.isFinite &&
+      longitude.isFinite &&
+      latitude.abs() <= 90 &&
+      longitude.abs() <= 180 &&
+      accuracyMeters.isFinite &&
+      accuracyMeters >= 0;
 
   @override
   bool operator ==(Object other) {
