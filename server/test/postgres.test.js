@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { Repository } from '../src/repository.js';
 import { sha256 } from '../src/protocol.js';
-import { verifyPassword } from '../src/auth.js';
+import { hashPassword, verifyPassword } from '../src/auth.js';
 
 test('PostgreSQL atomic revisions, tenant isolation, immutable blobs and rollback', { skip: !process.env.TEST_DATABASE_URL }, async () => {
   const admin = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL });
@@ -39,6 +39,33 @@ test('PostgreSQL atomic revisions, tenant isolation, immutable blobs and rollbac
     assert.equal((await repository.session(sessionHash)).id, a.id);
     await repository.revoke(sessionHash);
     assert.equal(await repository.session(sessionHash), undefined);
+    const sessionA = sha256('reset-session-a'); const sessionB = sha256('reset-session-b');
+    await repository.createSession(a.id, sessionA, new Date(Date.now() + 60000));
+    await repository.createSession(b.id, sessionB, new Date(Date.now() + 60000));
+    const code = sha256('reset-token'); const nextHash = await hashPassword('new forgotten password fixture');
+    assert.equal(await repository.issuePasswordReset(a.id, code, new Date(Date.now() + 60000)), true);
+    assert.equal(await repository.issuePasswordReset(a.id, sha256('too soon'), new Date(Date.now() + 60000)), false);
+    assert.equal(await repository.resetPassword(b.email, code, nextHash), false);
+    assert.equal(await repository.resetPassword(a.email, sha256('wrong token'), nextHash), false);
+    assert.equal((await repository.session(sessionA)).id, a.id);
+    const resets = await Promise.all([
+      repository.resetPassword(a.email, code, nextHash),
+      repository.resetPassword(a.email, code, nextHash),
+    ]);
+    assert.deepEqual(resets.sort(), [false, true]);
+    await assert.rejects(repository.createSession(a.id, sha256('stale login'), new Date(Date.now() + 60000), a.password_hash), e => e.code === 'invalid_credentials');
+    assert.equal(await repository.session(sha256('stale login')), undefined);
+    assert.equal(await repository.session(sessionA), undefined);
+    assert.equal((await repository.session(sessionB)).id, b.id);
+    assert.equal(await verifyPassword('new forgotten password fixture', (await repository.findUser(a.email)).password_hash), true);
+    assert.equal(await repository.resetPassword(a.email, code, nextHash), false);
+    assert.equal(await repository.issuePasswordReset(a.id, code, new Date(Date.now() - 1000)), true);
+    assert.equal(await repository.resetPassword(a.email, code, nextHash), false);
+    await repository.pool.query("UPDATE password_resets SET issued_at=now()-interval '2 minutes' WHERE user_id=$1", [a.id]);
+    const replacement = sha256('replacement token');
+    assert.equal(await repository.issuePasswordReset(a.id, replacement, new Date(Date.now() + 60000)), true);
+    assert.equal(await repository.resetPassword(a.email, code, nextHash), false);
+    assert.equal(await repository.resetPassword(a.email, replacement, nextHash), true);
     const image = Buffer.from('photo'); const imageDigest = sha256(image); let uploads = 0;
     await Promise.all([1, 2].map(() => repository.storeBlob(a.id, imageDigest, image, async () => { uploads++; return 'zipline-file'; })));
     assert.equal(uploads, 1);

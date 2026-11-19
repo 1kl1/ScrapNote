@@ -20,13 +20,36 @@ export class Repository {
     const result = await this.pool.query('UPDATE users SET password_hash=$3 WHERE id=$1 AND password_hash=$2', [userId, oldHash, newHash]);
     return result.rowCount === 1;
   }
-  async createSession(userId, hash, expiresAt) {
+  async issuePasswordReset(userId, hash, expiresAt) {
+    const result = await this.pool.query(`INSERT INTO password_resets(user_id,token_hash,expires_at) VALUES($1,$2,$3)
+      ON CONFLICT(user_id) DO UPDATE SET token_hash=$2, expires_at=$3, issued_at=now()
+      WHERE password_resets.issued_at <= now() - interval '1 minute'`, [userId, hash, expiresAt]);
+    return result.rowCount === 1;
+  }
+  async resetPassword(email, hash, passwordHash) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(`SELECT u.id FROM users u JOIN password_resets r ON r.user_id=u.id
+        WHERE u.email=$1 AND r.token_hash=$2 AND r.expires_at>now() FOR UPDATE OF u,r`, [email, hash]);
+      if (!rows.length) { await client.query('ROLLBACK'); return false; }
+      const userId = rows[0].id;
+      await client.query('UPDATE users SET password_hash=$2 WHERE id=$1', [userId, passwordHash]);
+      await client.query('DELETE FROM password_resets WHERE user_id=$1', [userId]);
+      await client.query('DELETE FROM sessions WHERE user_id=$1', [userId]);
+      await client.query('COMMIT'); return true;
+    } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+  }
+  async createSession(userId, hash, expiresAt, passwordHash = null) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       await client.query('DELETE FROM sessions WHERE expires_at < now()');
+      // Lock the account before creating a session so a concurrent reset cannot
+      // leave a new session authenticated by the old password.
+      const { rows } = await client.query('UPDATE users SET last_sign_in_at=now() WHERE id=$1 AND ($2::text IS NULL OR password_hash=$2) RETURNING *', [userId, passwordHash]);
+      if (!rows.length) throw new ApiError(401, 'invalid_credentials', '이메일 또는 비밀번호가 맞지 않습니다.');
       await client.query('INSERT INTO sessions VALUES($1,$2,$3)', [hash, userId, expiresAt]);
-      const { rows } = await client.query('UPDATE users SET last_sign_in_at=now() WHERE id=$1 RETURNING *', [userId]);
       await client.query('COMMIT'); return rows[0];
     } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
   }

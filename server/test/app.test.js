@@ -5,10 +5,23 @@ import { hashPassword } from '../src/auth.js';
 import { ApiError, sha256, validateEntries } from '../src/protocol.js';
 
 class MemoryRepository {
+  resets = new Map();
   users = []; sessions = new Map(); manifests = new Map(); blobs = new Map();
   async ping() {}
   async findUser(email) { return this.users.find(u => u.email === email); }
   async changePassword(id, oldHash, newHash) { const user = this.users.find(u => u.id === id && u.password_hash === oldHash); if (!user) return false; user.password_hash = newHash; return true; }
+  async issuePasswordReset(id, hash, expires) {
+    const previous = this.resets.get(id);
+    if (previous && previous.issued > Date.now() - 60000) return false;
+    this.resets.set(id, { hash, expires, issued: Date.now() }); return true;
+  }
+  async resetPassword(email, hash, next) {
+    const user = await this.findUser(email); const reset = this.resets.get(user?.id);
+    if (!reset || reset.hash !== hash || new Date(reset.expires) <= new Date()) return false;
+    user.password_hash = next; this.resets.delete(user.id);
+    for (const [key, session] of this.sessions) if (session.id === user.id) this.sessions.delete(key);
+    return true;
+  }
   async createSession(id, hash, expires) { this.sessions.set(hash, { id, expires }); return this.users.find(u => u.id === id); }
   async session(hash) { const s = this.sessions.get(hash); return s && new Date(s.expires) > new Date() ? this.users.find(u => u.id === s.id) : null; }
   async revoke(hash) { this.sessions.delete(hash); }
@@ -25,7 +38,7 @@ class MemoryRepository {
   }
 }
 
-async function fixture(t) {
+async function fixture(t, { mailEnabled = true } = {}) {
   const repository = new MemoryRepository();
   const password = 'a strong fixture password';
   const hash = await hashPassword(password);
@@ -35,7 +48,9 @@ async function fixture(t) {
     async upload(owner, digest, bytes) { const id = owner + digest; pictures.set(id, bytes); return id; },
     async download(owner, digest, id) { return pictures.get(id); },
   };
-  const app = await buildApp({ repository, zipline }); t.after(() => app.close());
+  const mail = [];
+  const passwordResetMailer = mailEnabled ? { async send(email, code) { mail.push({ email, code }); } } : undefined;
+  const app = await buildApp({ repository, zipline, passwordResetMailer }); t.after(() => app.close());
   async function login(email = 'a@example.com', pass = password) {
     return app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email, password: pass } });
   }
@@ -43,7 +58,7 @@ async function fixture(t) {
   const b = (await login('b@example.com')).json().access_token;
   const request = (method, url, payload, token = a, raw = false) => app.inject({ method, url, payload,
     headers: { authorization: `Bearer ${token}`, ...(raw ? { 'content-type': 'application/octet-stream' } : {}) } });
-  return { repository, pictures, app, request, login, a, b };
+  return { repository, pictures, app, request, login, a, b, mail };
 }
 
 test('login, owner isolation, logout and no public signup', async t => {
@@ -112,4 +127,66 @@ test('password change checks current password and preserves sessions', async t =
   assert.equal((await request('GET', '/v1/auth/me', undefined, a)).statusCode, 200);
   assert.equal((await login('a@example.com', 'a strong fixture password')).statusCode, 401);
   assert.equal((await login('a@example.com', next)).statusCode, 200);
+});
+
+
+test('forgotten password resets with emailed code without login and revokes only owner sessions', async t => {
+  const { app, mail, repository, request, login, a, b } = await fixture(t);
+  const send = email => app.inject({ method: 'POST', url: '/v1/auth/password/reset/request', payload: { email } });
+  const reset = (email, code, new_password = 'new forgotten password fixture') => app.inject({ method: 'POST', url: '/v1/auth/password/reset', payload: { email, code, new_password } });
+  const known = await send(' A@EXAMPLE.COM ');
+  const unknown = await send('unknown@example.com');
+  assert.equal(known.statusCode, 200);
+  assert.deepEqual(known.json(), unknown.json());
+  assert.equal(mail.length, 1);
+  const code = mail[0].code;
+  assert.equal(mail[0].email, 'a@example.com');
+  assert.match(code, /^[A-Za-z0-9_-]{32}$/);
+  assert.equal(repository.resets.get('a').hash, sha256(code));
+  assert.equal((await reset('b@example.com', code)).json().code, 'invalid_reset_code');
+  assert.equal((await reset('unknown@example.com', code)).json().code, 'invalid_reset_code');
+  assert.equal((await reset('a@example.com', 'wrong')).json().code, 'invalid_reset_code');
+  assert.equal((await reset('a@example.com', code, 'short')).statusCode, 400);
+  assert.equal((await reset(' A@EXAMPLE.COM ', code)).statusCode, 200);
+  assert.equal(repository.resets.has('a'), false);
+  assert.equal((await reset('a@example.com', code)).json().code, 'invalid_reset_code');
+  assert.equal((await request('GET', '/v1/auth/me', undefined, a)).statusCode, 401);
+  assert.equal((await request('GET', '/v1/auth/me', undefined, b)).statusCode, 200);
+  assert.equal((await login()).statusCode, 401);
+  assert.equal((await login('a@example.com', 'new forgotten password fixture')).statusCode, 200);
+});
+
+test('reset codes expire and resending invalidates the previous code with a cooldown', async t => {
+  const { app, mail, repository } = await fixture(t);
+  const send = () => app.inject({ method: 'POST', url: '/v1/auth/password/reset/request', payload: { email: 'a@example.com' } });
+  const reset = code => app.inject({ method: 'POST', url: '/v1/auth/password/reset', payload: { email: 'a@example.com', code, new_password: 'replacement long password' } });
+  await send(); const old = mail[0].code;
+  await send(); assert.equal(mail.length, 1);
+  repository.resets.get('a').issued -= 61000;
+  await send(); assert.equal(mail.length, 2);
+  assert.equal((await reset(old)).json().code, 'invalid_reset_code');
+  repository.resets.get('a').expires = new Date(Date.now() - 1000).toISOString();
+  assert.equal((await reset(mail[1].code)).json().code, 'invalid_reset_code');
+});
+
+test('reset requests validate email, require mail configuration and are rate limited', async t => {
+  const { app, mail } = await fixture(t);
+  const send = email => app.inject({ method: 'POST', url: '/v1/auth/password/reset/request', payload: { email } });
+  assert.equal((await send('invalid')).statusCode, 400);
+  assert.equal(mail.length, 0);
+  let response;
+  for (let i = 0; i < 6; i++) response = await send('unknown@example.com');
+  assert.equal(response.statusCode, 429);
+  const unavailable = await fixture(t, { mailEnabled: false });
+  for (const email of ['a@example.com', 'unknown@example.com']) {
+    assert.equal((await unavailable.app.inject({ method: 'POST', url: '/v1/auth/password/reset/request', payload: { email } })).json().code, 'mail_unavailable');
+  }
+});
+
+
+test('reset submissions are rate limited without a session', async t => {
+  const { app } = await fixture(t);
+  let response;
+  for (let i = 0; i < 11; i++) response = await app.inject({ method: 'POST', url: '/v1/auth/password/reset', payload: { email: 'a@example.com', code: 'wrong', new_password: 'a sufficiently long password' } });
+  assert.equal(response.statusCode, 429);
 });

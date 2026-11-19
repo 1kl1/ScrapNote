@@ -8,6 +8,8 @@ Future<void> main() async {
   SyncClient? client;
   try {
     client = await SyncBootstrap.initialize();
-  } on Exception {}
+  } on Exception {
+    // Keep the local workspace available when sync cannot initialize.
+  }
   runApp(ScrapnoteApp(syncClient: client));
 }

@@ -130,6 +130,18 @@ class SyncClient {
           code: code,
         );
       }
+      if (code == 'invalid_reset_code') {
+        throw const SyncAuthException(
+          '재설정 코드가 올바르지 않거나 만료되었습니다. 코드를 다시 받아 주세요.',
+          code: 'invalid_reset_code',
+        );
+      }
+      if (code == 'mail_unavailable') {
+        throw const SyncAuthException(
+          '재설정 메일을 보낼 수 없습니다. 서버 관리자의 메일 발송 설정이 필요합니다.',
+          code: 'mail_unavailable',
+        );
+      }
       if (code == 'incorrect_password') {
         throw const SyncAuthException(
           '현재 비밀번호가 맞지 않습니다.',
@@ -217,14 +229,25 @@ class SyncAuth {
     _changes.add(const SyncAuthState(SyncAuthEvent.signedIn));
   }
 
-  Future<void> changePassword({
-    required String currentPassword,
+  Future<void> requestPasswordReset({required String email}) async {
+    await _client.json(
+      'POST',
+      '/v1/auth/password/reset/request',
+      body: {'email': email},
+      authenticated: false,
+    );
+  }
+
+  Future<void> resetPassword({
+    required String email,
+    required String code,
     required String newPassword,
   }) async {
     await _client.json(
       'POST',
-      '/v1/auth/password',
-      body: {'current_password': currentPassword, 'new_password': newPassword},
+      '/v1/auth/password/reset',
+      body: {'email': email, 'code': code, 'new_password': newPassword},
+      authenticated: false,
     );
   }
 

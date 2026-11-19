@@ -50,9 +50,19 @@ void main() {
 
   Future<void> press(WidgetTester tester, String label) async {
     final button = find.widgetWithText(FButton, label);
-    await Scrollable.ensureVisible(tester.element(button), alignment: 0.5);
+    tester
+        .state<ScrollableState>(find.byType(Scrollable).first)
+        .position
+        .jumpTo(0);
+    await tester.pump();
+    await tester.scrollUntilVisible(
+      button,
+      150,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(button);
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
   }
@@ -221,12 +231,21 @@ void main() {
     );
     expect(find.text('이 기기에서 로그아웃'), findsOneWidget);
   });
-  testWidgets('changes password after validation and reports server errors', (
+  testWidgets('resets forgotten password before login and then signs in', (
     tester,
   ) async {
-    var changes = 0;
+    var requests = 0;
+    var resets = 0;
     final client = await mount(tester, (request) async {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      expect(request.headers['Authorization'], isNull);
+      expect(body['email'], 'person@example.com');
+      if (request.url.path == '/v1/auth/password/reset/request') {
+        requests++;
+        return http.Response('{"ok":true}', 200);
+      }
       if (request.url.path == '/v1/auth/login') {
+        expect(body['password'], 'a new long password');
         return http.Response(
           jsonEncode({
             'access_token': 'fixture-access',
@@ -238,23 +257,25 @@ void main() {
           200,
         );
       }
-      expect(request.url.path, '/v1/auth/password');
-      final body = jsonDecode(request.body) as Map<String, dynamic>;
-      expect(body['current_password'], 'old password');
+      expect(request.url.path, '/v1/auth/password/reset');
+      expect(body['code'], 'a' * 32);
       expect(body['new_password'], 'a new long password');
-      changes++;
-      return changes == 1
-          ? http.Response(jsonEncode({'code': 'incorrect_password'}), 400)
+      expect(body.containsKey('current_password'), isFalse);
+      resets++;
+      return resets == 1
+          ? http.Response('{"code":"invalid_reset_code"}', 400)
           : http.Response('{"ok":true}', 200);
     });
-    await tester.runAsync(
-      () => client.auth.signInWithPassword(
-        email: 'person@example.com',
-        password: 'fixture',
-      ),
-    );
+    await press(tester, '비밀번호 재설정');
+    expect(find.text('현재 비밀번호'), findsNothing);
+    await press(tester, '재설정 코드 받기');
+    expect(requests, 0);
+    await email(tester);
+    await press(tester, '재설정 코드 받기');
     await tester.pumpAndSettle();
-    await press(tester, '비밀번호 변경');
+    expect(requests, 1);
+    expect(client.auth.currentUser, isNull);
+
     Future<void> fill(String key, String value, {double delta = 120}) async {
       final field = find.byKey(ValueKey(key));
       await tester.scrollUntilVisible(
@@ -268,25 +289,91 @@ void main() {
       );
     }
 
-    await fill('current-password', 'old password');
-    await fill('new-password', 'a new long password');
+    await press(tester, '새 비밀번호 저장');
+    expect(resets, 0);
+    await fill('reset-code', 'a' * 32, delta: -120);
+    await fill('new-password', 'short');
+    await fill('confirm-password', 'short');
+    await press(tester, '새 비밀번호 저장');
+    expect(resets, 0);
+    await fill('new-password', 'a new long password', delta: -120);
     await fill('confirm-password', 'mismatch');
-    await press(tester, '변경 저장');
-    expect(changes, 0);
+    await press(tester, '새 비밀번호 저장');
+    expect(resets, 0);
     await fill('confirm-password', 'a new long password', delta: -120);
-    await press(tester, '변경 저장');
-    expect(changes, 1);
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    await press(tester, '새 비밀번호 저장');
+    await tester.pumpAndSettle();
+    expect(resets, 1);
+    expect(client.auth.currentUser, isNull);
+    await tester.scrollUntilVisible(
+      find.text('재설정 코드가 올바르지 않거나 만료되었습니다. 코드를 다시 받아 주세요.'),
+      150,
+      scrollable: find.byType(Scrollable).last,
     );
-    await tester.pump();
+    await press(tester, '코드 다시 받기');
+    await tester.pumpAndSettle();
+    expect(requests, 2);
+    await fill('reset-code', 'a' * 32, delta: -120);
+    await press(tester, '새 비밀번호 저장');
+    await tester.pumpAndSettle();
+    expect(resets, 2);
+    expect(client.auth.currentUser, isNull);
+    final loginPassword = find.byKey(const ValueKey('login-password'));
+    await tester.scrollUntilVisible(
+      loginPassword,
+      -150,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.enterText(
+      find.descendant(of: loginPassword, matching: find.byType(EditableText)),
+      'a new long password',
+    );
+    await press(tester, '로그인');
+    await tester.pumpAndSettle();
     expect(client.auth.currentUser, isNotNull);
-    await press(tester, '변경 저장');
-    expect(changes, 2);
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    expect(find.text('비밀번호 재설정'), findsNothing);
+  });
+
+  testWidgets('returning to login clears reset and login passwords', (
+    tester,
+  ) async {
+    await mount(tester, (_) async => http.Response('{"ok":true}', 200));
+    await email(tester);
+    await tester.enterText(find.byType(EditableText).last, 'stale password');
+    await press(tester, '비밀번호 재설정');
+    await press(tester, '재설정 코드 받기');
+    await tester.pumpAndSettle();
+    final code = find.byKey(const ValueKey('reset-code'));
+    await tester.enterText(
+      find.descendant(of: code, matching: find.byType(EditableText)),
+      'private code',
     );
-    await tester.pump();
-    expect(find.text('비밀번호 변경'), findsOneWidget);
+    await press(tester, '로그인으로 돌아가기');
+    await tester.pumpAndSettle();
+    final password = tester.widget<EditableText>(
+      find.byType(EditableText).last,
+    );
+    expect(password.controller.text, isEmpty);
+    await press(tester, '비밀번호 재설정');
+    expect(find.byKey(const ValueKey('reset-code')), findsNothing);
+    expect(find.text('재설정 코드 받기'), findsOneWidget);
+  });
+
+  testWidgets('missing mail configuration reports an actionable error', (
+    tester,
+  ) async {
+    await mount(
+      tester,
+      (_) async => http.Response('{"code":"mail_unavailable"}', 503),
+    );
+    await email(tester);
+    await press(tester, '비밀번호 재설정');
+    await press(tester, '재설정 코드 받기');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('reset-code')), findsNothing);
+    expect(
+      find.text('재설정 메일을 보낼 수 없습니다. 서버 관리자의 메일 발송 설정이 필요합니다.'),
+      findsOneWidget,
+    );
   });
 }

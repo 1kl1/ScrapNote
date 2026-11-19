@@ -3,7 +3,17 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": {"node": ">=22"},
-  "scripts": {"start": "node src/main.js", "test": "node --test test/*.test.js"},
-  "dependencies": {"fastify": "^5.6.0", "@fastify/rate-limit": "^10.3.0", "pg": "^8.16.3"}
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@fastify/rate-limit": "^10.3.0",
+    "fastify": "^5.6.0",
+    "nodemailer": "^10.6.0",
+    "pg": "^8.16.3"
+  }
 }

@@ -21,6 +21,27 @@ npm start
 비밀번호는 재시작하거나 INITIAL_PASSWORD를 바꿔도 덮어쓰지 않는다. 공개 회원가입은
 없다. 비밀번호는 scrypt로, 세션 토큰은 SHA-256으로 저장한다. 세션은 30일 뒤 만료된다.
 
+## 로그인 전 비밀번호 재설정
+
+로그인 화면의 **비밀번호 재설정**에서 가입한 이메일로 코드를 요청하고,
+메일로 받은 코드와 새 비밀번호(16~1024자)를 입력한다. 현재 비밀번호나 로그인 세션은
+필요하지 않다. 성공하면 모든 기기의 기존 세션을 폐기하며 새 비밀번호로 다시 로그인한다.
+
+Coolify의 API 환경 변수에 `SMTP_URL`과 `SMTP_FROM`을 설정하고, Compose 환경 변수
+매핑도 적용한 뒤 API 이미지를 다시 빌드·배포해야 한다. 자동 배포 워크플로는 기존
+Coolify Compose를 그대로 사용하므로 해당 매핑은 Coolify에서도 갱신해야 한다.
+`SMTP_URL`은 `smtps://사용자명:비밀번호@호스트:465` 또는
+`smtp://사용자명:비밀번호@호스트:587` 형식이며, 특수문자는 URL 인코딩한다.
+`SMTP_FROM`에는 메일 제공업체에서 발송을 허용한 이메일 주소를 설정한다.
+SMTP는 TLS를 필수로 사용한다([Nodemailer SMTP 설정](https://nodemailer.com/smtp)).
+미설정 시 앱에 메일 발송 설정이 필요하다는 오류를 표시하며 로그인과 동기화는 계속 사용할 수 있다.
+
+코드는 192비트 난수이며 DB에는 SHA-256 해시만 저장한다. 15분 후 만료되고 한 번만
+사용할 수 있다. 같은 계정에는 1분 간격으로 발급하며 새 코드는 이전 코드를 무효화한다.
+요청 응답은 가입 여부를 공개하지 않는다. 메일 전송 실패는 코드나 이메일 없이
+서버 로그의 `password_reset_delivery_failed`로 기록한다. 메일이 오지 않으면 SMTP 설정,
+스팸함과 로그를 확인하고 1분 뒤 다시 요청한다.
+
 ## Coolify 배포
 
 현재 서버 소스는 `/home/ubuntu/scrapnote-api`, 서비스는
@@ -61,11 +82,13 @@ docker exec database-e7aoqro0dfik9uxwx9lxnwfq \
 
 ## API와 검증
 
+- `POST /v1/auth/password/reset/request` (`email`), `POST /v1/auth/password/reset` (`email`, `code`, `new_password`)
+- `POST /v1/auth/password` (`current_password`, `new_password`, 이전 앱 호환용 Bearer 인증)
 - `POST /v1/auth/login`, `POST /v1/auth/logout`, `GET /v1/auth/me`
 - `GET /v1/manifest`, `PUT /v1/manifest` (`expected_revision`, `entries`)
 - `PUT /v1/blobs/:sha256?path=...`, `GET /v1/blobs/:sha256`
 
-로그인과 상태 확인 외에는 Bearer 세션이 필요하다. 파일 한도는 25 MiB, manifest는
+로그인, 비밀번호 재설정과 상태 확인 외에는 Bearer 세션이 필요하다. 파일 한도는 25 MiB, manifest는
 4 MiB다. 소유자 범위와 해시를 검사하며 파일 업로드가 끝난 후에만 manifest를 원자적으로
 커밋한다. 같은 버전의 동시 커밋은 한 요청만 성공한다. 삭제된 파일의 이전 blob은
 즉시 물리 삭제하지 않으며 현재는 별도 자동 정리 작업을 실행하지 않는다.

@@ -21,3 +21,10 @@ CREATE TABLE IF NOT EXISTS vault_blobs (
   PRIMARY KEY (user_id, digest),
   CHECK ((content IS NOT NULL AND zipline_id IS NULL) OR (content IS NULL AND zipline_id IS NOT NULL))
 );
+
+CREATE TABLE IF NOT EXISTS password_resets (
+  user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  token_hash text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  issued_at timestamptz NOT NULL DEFAULT now()
+);

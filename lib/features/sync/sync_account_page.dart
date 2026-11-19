@@ -35,10 +35,11 @@ class SyncAccountPage extends StatefulWidget {
 class _SyncAccountPageState extends State<SyncAccountPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
-  final _currentPassword = TextEditingController();
+  final _resetCode = TextEditingController();
   final _newPassword = TextEditingController();
   final _confirmPassword = TextEditingController();
-  bool _changingPassword = false;
+  bool _resettingPassword = false;
+  bool _resetCodeSent = false;
   StreamSubscription<SyncAuthState>? _authSubscription;
   bool _busy = false;
   late String _status = widget.status;
@@ -52,7 +53,7 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
   void dispose() {
     _email.dispose();
     _password.dispose();
-    _currentPassword.dispose();
+    _resetCode.dispose();
     _newPassword.dispose();
     _confirmPassword.dispose();
     _authSubscription?.cancel();
@@ -106,14 +107,31 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
   }
 
   void _clearPasswordFields() {
-    _currentPassword.clear();
+    _resetCodeSent = false;
+    _resetCode.clear();
     _newPassword.clear();
     _confirmPassword.clear();
   }
 
-  void _changePassword() {
-    if (_currentPassword.text.isEmpty) {
-      setState(() => _status = '현재 비밀번호를 입력해 주세요.');
+  void _requestPasswordReset() {
+    if (!_checkEmail()) return;
+    unawaited(
+      _run(() async {
+        await widget.client.auth.requestPasswordReset(
+          email: _email.text.trim(),
+        );
+        _resetCode.clear();
+        _resetCodeSent = true;
+        _status =
+            '등록된 주소로 재설정 코드를 요청했습니다. 메일함을 확인해 주세요. 코드는 15분 동안 유효하며, 재요청은 1분 뒤에 해 주세요.';
+      }),
+    );
+  }
+
+  void _resetPassword() {
+    if (!_checkEmail()) return;
+    if (_resetCode.text.trim().isEmpty) {
+      setState(() => _status = '이메일로 받은 재설정 코드를 입력해 주세요.');
       return;
     }
     if (_newPassword.text.length < 16 || _newPassword.text.length > 1024) {
@@ -126,13 +144,15 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
     }
     unawaited(
       _run(() async {
-        await widget.client.auth.changePassword(
-          currentPassword: _currentPassword.text,
+        await widget.client.auth.resetPassword(
+          email: _email.text.trim(),
+          code: _resetCode.text.trim(),
           newPassword: _newPassword.text,
         );
         _clearPasswordFields();
-        _changingPassword = false;
-        _status = '비밀번호를 변경했습니다. 기존 로그인 세션은 유지됩니다.';
+        _password.clear();
+        _resettingPassword = false;
+        _status = '비밀번호를 변경했습니다. 새 비밀번호로 로그인해 주세요.';
       }),
     );
   }
@@ -150,6 +170,8 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
         setState(() {
           if (signedIn) {
             _password.clear();
+            _clearPasswordFields();
+            _resettingPassword = false;
             _status = '로그인했습니다. 저장하고 동기화를 눌러 기기의 파일을 연결하세요.';
           }
         });
@@ -210,36 +232,113 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                         label: const Text('이메일'),
                         control: FTextFieldControl.managed(controller: _email),
                         keyboardType: TextInputType.emailAddress,
-                        enabled: !_busy,
+                        enabled: !_busy && !_resetCodeSent,
                       ),
                       const SizedBox(height: 16),
-                      FTextField.password(
-                        label: const Text('비밀번호'),
-                        control: FTextFieldControl.managed(
-                          controller: _password,
+                      if (_resettingPassword) ...[
+                        const Text('가입한 이메일로 받은 코드로 본인 확인 후 비밀번호를 재설정합니다.'),
+                        const SizedBox(height: 16),
+                        if (_resetCodeSent) ...[
+                          const Text('재설정하면 모든 기기에서 로그아웃됩니다.'),
+                          const SizedBox(height: 12),
+                          FTextField(
+                            key: const ValueKey('reset-code'),
+                            label: const Text('재설정 코드'),
+                            control: FTextFieldControl.managed(
+                              controller: _resetCode,
+                            ),
+                            enabled: !_busy,
+                          ),
+                          const SizedBox(height: 12),
+                          FTextField.password(
+                            key: const ValueKey('new-password'),
+                            label: const Text('새 비밀번호 (16자 이상)'),
+                            control: FTextFieldControl.managed(
+                              controller: _newPassword,
+                            ),
+                            enabled: !_busy,
+                          ),
+                          const SizedBox(height: 12),
+                          FTextField.password(
+                            key: const ValueKey('confirm-password'),
+                            label: const Text('새 비밀번호 확인'),
+                            control: FTextFieldControl.managed(
+                              controller: _confirmPassword,
+                            ),
+                            enabled: !_busy,
+                          ),
+                          const SizedBox(height: 12),
+                          FButton(
+                            onPress: _busy ? null : _resetPassword,
+                            child: const Text('새 비밀번호 저장'),
+                          ),
+                          const SizedBox(height: 8),
+                          FButton(
+                            variant: FButtonVariant.outline,
+                            onPress: _busy ? null : _requestPasswordReset,
+                            child: const Text('코드 다시 받기'),
+                          ),
+                        ] else
+                          FButton(
+                            onPress: _busy ? null : _requestPasswordReset,
+                            child: const Text('재설정 코드 받기'),
+                          ),
+                        const SizedBox(height: 8),
+                        FButton(
+                          variant: FButtonVariant.outline,
+                          onPress: _busy
+                              ? null
+                              : () => setState(() {
+                                  _clearPasswordFields();
+                                  _resettingPassword = false;
+                                  _status = '';
+                                }),
+                          child: const Text('로그인으로 돌아가기'),
                         ),
-                        enabled: !_busy,
-                      ),
-                      const SizedBox(height: 24),
-                      FButton(
-                        onPress: _busy
-                            ? null
-                            : () {
-                                if (!_checkEmail()) return;
-                                unawaited(
-                                  _run(() async {
-                                    await widget.client.auth.signInWithPassword(
-                                      email: _email.text.trim(),
-                                      password: _password.text,
-                                    );
-                                    _password.clear();
-                                    _status =
-                                        '로그인했습니다. 동기화를 누르면 현재 기기의 저장된 파일을 연결합니다.';
-                                  }),
-                                );
-                              },
-                        child: const Text('로그인'),
-                      ),
+                      ] else ...[
+                        FTextField.password(
+                          key: const ValueKey('login-password'),
+                          label: const Text('비밀번호'),
+                          control: FTextFieldControl.managed(
+                            controller: _password,
+                          ),
+                          enabled: !_busy,
+                        ),
+                        const SizedBox(height: 24),
+                        FButton(
+                          onPress: _busy
+                              ? null
+                              : () {
+                                  if (!_checkEmail()) return;
+                                  unawaited(
+                                    _run(() async {
+                                      await widget.client.auth
+                                          .signInWithPassword(
+                                            email: _email.text.trim(),
+                                            password: _password.text,
+                                          );
+                                      _password.clear();
+                                      _status =
+                                          '로그인했습니다. 동기화를 누르면 현재 기기의 저장된 파일을 연결합니다.';
+                                    }),
+                                  );
+                                },
+                          child: const Text('로그인'),
+                        ),
+                        const SizedBox(height: 12),
+                        FButton(
+                          variant: FButtonVariant.outline,
+                          onPress: _busy
+                              ? null
+                              : () => setState(() {
+                                  _password.clear();
+                                  _clearPasswordFields();
+                                  _resettingPassword = true;
+                                  _status = '';
+                                }),
+                          child: const Text('비밀번호 재설정'),
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       const Text('개인 서버에 등록된 계정으로 로그인하세요.'),
                     ] else ...[
@@ -263,59 +362,6 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                           widget.client.auth.currentSession,
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      if (!_changingPassword)
-                        FButton(
-                          variant: FButtonVariant.outline,
-                          onPress: _busy
-                              ? null
-                              : () => setState(() => _changingPassword = true),
-                          child: const Text('비밀번호 변경'),
-                        )
-                      else ...[
-                        FTextField.password(
-                          key: const ValueKey('current-password'),
-                          label: const Text('현재 비밀번호'),
-                          control: FTextFieldControl.managed(
-                            controller: _currentPassword,
-                          ),
-                          enabled: !_busy,
-                        ),
-                        const SizedBox(height: 12),
-                        FTextField.password(
-                          key: const ValueKey('new-password'),
-                          label: const Text('새 비밀번호 (16자 이상)'),
-                          control: FTextFieldControl.managed(
-                            controller: _newPassword,
-                          ),
-                          enabled: !_busy,
-                        ),
-                        const SizedBox(height: 12),
-                        FTextField.password(
-                          key: const ValueKey('confirm-password'),
-                          label: const Text('새 비밀번호 확인'),
-                          control: FTextFieldControl.managed(
-                            controller: _confirmPassword,
-                          ),
-                          enabled: !_busy,
-                        ),
-                        const SizedBox(height: 12),
-                        FButton(
-                          onPress: _busy ? null : _changePassword,
-                          child: const Text('변경 저장'),
-                        ),
-                        const SizedBox(height: 8),
-                        FButton(
-                          variant: FButtonVariant.outline,
-                          onPress: _busy
-                              ? null
-                              : () => setState(() {
-                                  _clearPasswordFields();
-                                  _changingPassword = false;
-                                }),
-                          child: const Text('취소'),
-                        ),
-                      ],
                       const SizedBox(height: 24),
                       _SectionHeading(
                         icon: FLucideIcons.folderSync,
@@ -385,7 +431,7 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                             : () => _run(() async {
                                 await widget.client.auth.signOut();
                                 _clearPasswordFields();
-                                _changingPassword = false;
+                                _resettingPassword = false;
                                 _conflicts = [];
                                 _resolutions.clear();
                                 _status =

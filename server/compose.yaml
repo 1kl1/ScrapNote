@@ -9,6 +9,8 @@ services:
       - DATABASE_URL=postgresql://scrapnote:${POSTGRES_PASSWORD}@database:5432/scrapnote
       - INITIAL_EMAIL=${INITIAL_EMAIL}
       - INITIAL_PASSWORD=${INITIAL_PASSWORD}
+      - SMTP_URL=${SMTP_URL:-}
+      - SMTP_FROM=${SMTP_FROM:-}
       - ZIPLINE_URL=${ZIPLINE_URL}
       - ZIPLINE_TOKEN=${ZIPLINE_TOKEN}
       - ZIPLINE_PASSWORD_KEY=${ZIPLINE_PASSWORD_KEY}
