@@ -8,8 +8,6 @@ Future<void> main() async {
   SyncClient? client;
   try {
     client = await SyncBootstrap.initialize();
-  } on Exception {
-    // A keychain/session failure must not prevent access to local documents.
-  }
+  } on Exception {}
   runApp(ScrapnoteApp(syncClient: client));
 }
