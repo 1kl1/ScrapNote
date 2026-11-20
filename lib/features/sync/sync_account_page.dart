@@ -2,6 +2,7 @@
 // design-system: DESIGN.md · designed-as-app · Index-First editor shell
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import 'package:scrapnote/infrastructure/sync/sync_client.dart';
 import '../../app/scrapnote_theme.dart';
 import '../../infrastructure/sync/sync_manifest.dart';
 import '../../infrastructure/sync/sync_vault_summary.dart';
+import '../../infrastructure/sync/capture_sync_engine.dart';
 import '../../core/design/scrapnote_tokens.dart';
 
 class SyncAccountPage extends StatefulWidget {
@@ -21,6 +23,8 @@ class SyncAccountPage extends StatefulWidget {
     required this.status,
     required this.vaultPath,
     this.summaryLoader = loadSyncVaultSummary,
+    this.captureOnly = false,
+    this.onSignedIn,
     super.key,
   });
   final SyncClient client;
@@ -28,6 +32,8 @@ class SyncAccountPage extends StatefulWidget {
   final String status;
   final String vaultPath;
   final SyncVaultSummaryLoader summaryLoader;
+  final bool captureOnly;
+  final Future<String> Function()? onSignedIn;
   @override
   State<SyncAccountPage> createState() => _SyncAccountPageState();
 }
@@ -48,6 +54,9 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
   SyncVaultSummary _summary = SyncVaultSummary.empty;
   bool _summaryLoading = true;
   String? _summaryError;
+  List<CaptureItem> _captureItems = [];
+  String? _migrationNotice;
+  final Map<String, List<String>> _capturePreviews = {};
 
   @override
   void dispose() {
@@ -70,6 +79,35 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
       _resolutions.clear();
       _status =
           '같은 파일이 양쪽에서 바뀌었습니다. 사용할 내용을 선택해 주세요. 삭제와 수정이 겹친 경우도 여기에 표시됩니다.';
+      if (widget.captureOnly) {
+        await _loadSummary();
+        for (final conflict in _conflicts) {
+          try {
+            final previews = <String>[];
+            for (final digest in [conflict.local, conflict.remote]) {
+              if (digest == null) {
+                previews.add('삭제됨');
+                continue;
+              }
+              final bytes = digest == conflict.local
+                  ? await (await CaptureSyncEngine.safeFile(
+                      Directory(widget.vaultPath),
+                      conflict.path,
+                    )).readAsBytes()
+                  : await widget.client.request('GET', '/v1/blobs/$digest');
+              final body = CaptureSyncEngine.codec
+                  .decode(utf8.decode(bytes))
+                  .body;
+              previews.add(
+                body.length > 1200 ? '${body.substring(0, 1200)}…' : body,
+              );
+            }
+            _capturePreviews[conflict.path] = previews;
+          } on Exception {
+            /* The conflict remains resolvable without a preview. */
+          }
+        }
+      }
     } on SyncAuthException catch (error) {
       _status = _authErrorMessage(error);
     } on Exception {
@@ -87,12 +125,28 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
       });
     }
     try {
-      final summary = await widget.summaryLoader(widget.vaultPath);
+      final summary = widget.captureOnly
+          ? SyncVaultSummary.empty
+          : await widget.summaryLoader(widget.vaultPath);
+      final captureItems = widget.captureOnly
+          ? await CaptureSyncEngine.items(Directory(widget.vaultPath))
+          : <CaptureItem>[];
+      final captureState = widget.captureOnly
+          ? await CaptureSyncEngine.readState(Directory(widget.vaultPath))
+          : <String, dynamic>{};
       if (!mounted) return;
-      setState(() => _summary = summary);
+      setState(() {
+        _summary = summary;
+        _captureItems = captureItems;
+        _migrationNotice = captureState['migration_notice'] as String?;
+      });
     } on FileSystemException {
       if (!mounted) return;
       setState(() => _summaryError = 'Vault 통계를 읽지 못했습니다. 폴더 접근 권한을 확인해 주세요.');
+    } on FormatException {
+      if (mounted) {
+        setState(() => _summaryError = '전송 내역을 읽지 못했습니다. 기기에 저장된 파일은 유지됩니다.');
+      }
     } finally {
       if (mounted) setState(() => _summaryLoading = false);
     }
@@ -172,7 +226,9 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
             _password.clear();
             _clearPasswordFields();
             _resettingPassword = false;
-            _status = '로그인했습니다. 저장하고 동기화를 눌러 기기의 파일을 연결하세요.';
+            _status = widget.captureOnly
+                ? '로그인했습니다. 이 휴대폰의 Scrap만 업로드합니다.'
+                : '로그인했습니다. 저장하고 동기화를 눌러 기기의 파일을 연결하세요.';
           }
         });
         if (signedIn) unawaited(_loadSummary());
@@ -189,7 +245,9 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
   }
 
   Future<void> _sync() => _run(() async {
-    _status = '기기의 변경 내용을 저장하고 동기화하는 중입니다.';
+    _status = widget.captureOnly
+        ? '이 휴대폰의 Scrap을 저장하고 전송하는 중입니다.'
+        : '기기의 변경 내용을 저장하고 동기화하는 중입니다.';
     _status = await widget.onSync(_resolutions);
     _conflicts = [];
     _resolutions.clear();
@@ -215,18 +273,25 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                 child: ListView(
                   padding: const EdgeInsets.all(24),
                   children: [
-                    const Text(
-                      '모든 기기에서 이어 쓰기',
-                      style: TextStyle(
+                    Text(
+                      widget.captureOnly ? '내 Scrap 업로드' : '모든 기기에서 이어 쓰기',
+                      style: const TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                     const SizedBox(height: 12),
-                    const Text(
-                      '노트, 스크랩, 이미지와 가계부를 개인 계정으로 연동합니다. 기기에 저장된 내용을 동기화 버튼을 눌렀을 때만 다른 기기와 연결합니다.',
+                    Text(
+                      widget.captureOnly
+                          ? '이 휴대폰에서 작성한 Scrap과 첨부만 전송합니다. 저장한 내용은 앱이 열려 있을 때 자동으로 전송하며, 수정·삭제도 서버에 반영합니다.'
+                          : '노트, 스크랩, 이미지와 가계부를 개인 계정으로 연동합니다. 기기에 저장된 내용을 동기화 버튼을 눌렀을 때만 다른 기기와 연결합니다.',
                     ),
                     const SizedBox(height: 24),
+                    if (_migrationNotice != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: Text(_migrationNotice!),
+                      ),
                     if (user == null) ...[
                       FTextField(
                         label: const Text('이메일'),
@@ -318,8 +383,15 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                                             password: _password.text,
                                           );
                                       _password.clear();
-                                      _status =
-                                          '로그인했습니다. 동기화를 누르면 현재 기기의 저장된 파일을 연결합니다.';
+                                      if (widget.captureOnly) {
+                                        _status =
+                                            await widget.onSignedIn?.call() ??
+                                            '로그인했습니다. 저장된 Scrap을 전송할 수 있습니다.';
+                                        await _loadSummary();
+                                      } else {
+                                        _status =
+                                            '로그인했습니다. 동기화를 누르면 현재 기기의 저장된 파일을 연결합니다.';
+                                      }
                                     }),
                                   );
                                 },
@@ -365,7 +437,9 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                       const SizedBox(height: 24),
                       _SectionHeading(
                         icon: FLucideIcons.folderSync,
-                        title: '이 Vault의 동기화 범위',
+                        title: widget.captureOnly
+                            ? '이 휴대폰의 작성·전송 내역'
+                            : '이 Vault의 동기화 범위',
                       ),
                       if (_summaryLoading)
                         const LinearProgressIndicator(minHeight: 2)
@@ -377,7 +451,43 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                             fontSize: 13,
                           ),
                         )
-                      else ...[
+                      else if (widget.captureOnly) ...[
+                        Text(
+                          '작성한 Scrap ${_captureItems.where((item) => !item.deleted).length}개 · 전송 확인 필요 ${_captureItems.where((item) => item.phase != CapturePhase.complete).length}개',
+                        ),
+                        const SizedBox(height: 12),
+                        if (_captureItems.isEmpty)
+                          const Text('아직 이 휴대폰에서 저장한 Scrap이 없습니다.'),
+                        for (final item in _captureItems)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  item.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  item.label,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: ScrapnoteTokens.mutedInk,
+                                  ),
+                                ),
+                                if (item.error != null)
+                                  Text(
+                                    item.error!,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: ScrapnoteTokens.destructive,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                      ] else ...[
                         _CountGrid(summary: _summary),
                         const SizedBox(height: 12),
                         _DetailRow(
@@ -396,7 +506,7 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                               : _date(_summary.lastSyncedAt!.toLocal()),
                         ),
                         const Text(
-                          '용량은 현재 기기의 Vault에서 동기화 대상으로 계산한 파일 크기입니다.',
+                          '항목 수와 용량은 현재 기기의 파일 기준입니다. 서버에 저장된 전체 자료 수가 아닙니다.',
                           style: TextStyle(
                             color: ScrapnoteTokens.mutedInk,
                             fontSize: 11,
@@ -419,7 +529,9 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                           _busy
                               ? '동기화 중…'
                               : _conflicts.isEmpty
-                              ? '저장하고 동기화'
+                              ? widget.captureOnly
+                                    ? '저장하고 업로드'
+                                    : '저장하고 동기화'
                               : '선택한 내용으로 동기화',
                         ),
                       ),
@@ -445,7 +557,31 @@ class _SyncAccountPageState extends State<SyncAccountPage> {
                     Semantics(liveRegion: true, child: Text(_status)),
                     for (final conflict in _conflicts) ...[
                       const Divider(height: 32),
-                      Text(conflict.path),
+                      Text(
+                        widget.captureOnly
+                            ? _captureItems
+                                      .where(
+                                        (item) => item.path == conflict.path,
+                                      )
+                                      .firstOrNull
+                                      ?.title ??
+                                  'Scrap'
+                            : conflict.path,
+                      ),
+                      if (_capturePreviews[conflict.path] case final previews?)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('이 기기'),
+                              Text(previews[0]),
+                              const SizedBox(height: 12),
+                              const Text('서버'),
+                              Text(previews[1]),
+                            ],
+                          ),
+                        ),
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8,

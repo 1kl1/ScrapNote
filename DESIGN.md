@@ -174,3 +174,15 @@ uploads. Authentication sessions use platform secure storage.
 References: [Flutter adaptive design](https://docs.flutter.dev/ui/adaptive-responsive),
 [display feature sub-screens](https://api.flutter.dev/flutter/widgets/DisplayFeatureSubScreen-class.html),
 [Forui navigation](https://forui.dev/docs/widgets/navigation/bottom-navigation-bar).
+
+## Mobile capture mode
+
+Android and iOS use a capture-only shell at every width, including unfolded
+screens. Keep the shared paper, type, spacing and editor controls. The header
+contains account access; the workspace contains only this device's scraps.
+Remove the feature rail and bottom destination navigation in capture mode.
+A touch-sized status strip distinguishes unsaved text, pending transmission,
+current upload stage, completion and failure, with retry and transmission history.
+List rows expose status and a touch deletion action. Confirm that deletion also
+removes the server copy. Desktop navigation remains controlled by its existing
+responsive layout. Mobile mode follows the platform, not a narrow desktop window.

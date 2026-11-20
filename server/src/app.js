@@ -3,6 +3,7 @@ import rateLimit from '@fastify/rate-limit';
 import { randomBytes } from 'node:crypto';
 import { hashPassword, verifyPassword, publicUser } from './auth.js';
 import { ApiError, MAX_BLOB, MAX_MANIFEST, invalid, sha256, validatePath, validateEntries } from './protocol.js';
+import { capturePaths, captureChange } from './capture.js';
 export async function buildApp({ repository, zipline, passwordResetMailer, logger = false }) {
   const app = Fastify({ logger, bodyLimit: MAX_MANIFEST + 16384, requestTimeout: 180000, trustProxy: 1 });
   const dummyHash = await hashPassword(randomBytes(32).toString('hex'));
@@ -71,6 +72,11 @@ export async function buildApp({ repository, zipline, passwordResetMailer, logge
   app.get('/v1/auth/me', async request => ({ user: publicUser(request.user) }));
   app.post('/v1/auth/logout', async request => { await repository.revoke(request.sessionHash); return { ok: true }; });
   app.get('/v1/manifest', async request => repository.manifest(request.user.id));
+  app.post('/v1/capture/status', async request => {
+    const paths = capturePaths(request.body?.paths);
+    return { entries: await repository.captureStatus(request.user.id, paths) };
+  });
+  app.post('/v1/capture', async request => repository.capture(request.user.id, captureChange(request.body)));
   app.put('/v1/blobs/:digest', { bodyLimit: MAX_BLOB }, async (request, reply) => {
     const digest = request.params.digest;
     const path = request.query.path;

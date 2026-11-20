@@ -28,7 +28,7 @@ class VaultAccess {
 
   Future<String> _mobileDirectory() async {
     final support = await getApplicationSupportDirectory();
-    final directory = await resolveMobileVaultDirectory(support);
+    final directory = await resolveMobileCaptureDirectory(support);
     return directory.path;
   }
 

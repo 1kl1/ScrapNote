@@ -74,3 +74,43 @@ test('PostgreSQL atomic revisions, tenant isolation, immutable blobs and rollbac
     await repository.close(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end();
   }
 });
+
+test('PostgreSQL capture commits serialize with desktop, isolate owners and replay after deletion', { skip: !process.env.TEST_DATABASE_URL }, async () => {
+  const { captureChange } = await import('../src/capture.js');
+  const admin = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL });
+  const schema = 'test_' + randomUUID().replaceAll('-', '');
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  const url = new URL(process.env.TEST_DATABASE_URL); url.searchParams.set('options', `-c search_path=${schema}`);
+  const repository = new Repository(url.toString());
+  try {
+    await repository.initialize('capture@example.com', 'capture test password long');
+    await repository.initialize('other@example.com', 'capture test password long');
+    const owner = (await repository.findUser('capture@example.com')).id;
+    const other = (await repository.findUser('other@example.com')).id;
+    const content = Buffer.from('phone'); const digest = sha256(content);
+    await repository.storeBlob(owner, digest, content, null);
+    await repository.commit(owner, 0, { 'notes/pc.md': digest, 'expenses/pc.json': digest });
+    const first = captureChange({ operation_id: randomUUID(), path: 'scraps/phone.md', base: null, digest, assets: {} });
+    const results = await Promise.allSettled([
+      repository.capture(owner, first),
+      repository.commit(owner, 1, { 'notes/new.md': digest, 'expenses/pc.json': digest }),
+    ]);
+    assert.equal(results[0].status, 'fulfilled');
+    const current = await repository.manifest(owner);
+    assert.equal(current.entries['scraps/phone.md'], digest);
+    assert.equal(current.entries['expenses/pc.json'], digest);
+    const before = current.revision;
+    await repository.capture(owner, first);
+    assert.equal((await repository.manifest(owner)).revision, before);
+    await repository.capture(owner, captureChange({ operation_id: randomUUID(), path: first.path, base: digest, digest: null, assets: {} }));
+    await repository.capture(owner, first);
+    assert.equal((await repository.manifest(owner)).entries[first.path], undefined);
+    assert.deepEqual(await repository.captureStatus(other, [first.path]), { [first.path]: null });
+    await assert.rejects(repository.capture(other, first), error => error.code === 'missing_blob');
+    assert.deepEqual((await repository.manifest(other)).entries, {});
+    await assert.rejects(repository.capture(owner, captureChange({ operation_id: randomUUID(), path: 'scraps/missing.md', base: null, digest: 'e'.repeat(64), assets: {} })), error => error.code === 'missing_blob');
+    assert.equal((await repository.manifest(owner)).entries['scraps/missing.md'], undefined);
+  } finally {
+    await repository.close(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end();
+  }
+});

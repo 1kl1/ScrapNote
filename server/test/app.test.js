@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.js';
 import { hashPassword } from '../src/auth.js';
 import { ApiError, sha256, validateEntries } from '../src/protocol.js';
+import { mergeCapture } from '../src/capture.js';
 
 class MemoryRepository {
+  receipts = new Map();
   resets = new Map();
   users = []; sessions = new Map(); manifests = new Map(); blobs = new Map();
   async ping() {}
@@ -26,6 +28,23 @@ class MemoryRepository {
   async session(hash) { const s = this.sessions.get(hash); return s && new Date(s.expires) > new Date() ? this.users.find(u => u.id === s.id) : null; }
   async revoke(hash) { this.sessions.delete(hash); }
   async manifest(owner) { return this.manifests.get(owner) ?? { revision: 0, entries: {} }; }
+  async captureStatus(owner, paths) {
+    const { entries } = await this.manifest(owner);
+    return Object.fromEntries(paths.map(path => [path, entries[path] ?? null]));
+  }
+  async capture(owner, change) {
+    const key = `${owner}/${change.operation}`;
+    const receipt = this.receipts.get(key);
+    if (receipt) {
+      if (receipt.fingerprint !== change.fingerprint) throw new ApiError(409, 'operation_reused', 'Conflict');
+      return receipt.result;
+    }
+    const manifest = await this.manifest(owner);
+    const entries = mergeCapture(manifest.entries, change);
+    await this.commit(owner, manifest.revision, entries);
+    const result = { digest: change.digest };
+    this.receipts.set(key, { fingerprint: change.fingerprint, result }); return result;
+  }
   async blob(owner, digest) { return this.blobs.get(`${owner}/${digest}`); }
   async storeBlob(owner, digest, bytes, upload) {
     const key = `${owner}/${digest}`;
@@ -189,4 +208,35 @@ test('reset submissions are rate limited without a session', async t => {
   let response;
   for (let i = 0; i < 11; i++) response = await app.inject({ method: 'POST', url: '/v1/auth/password/reset', payload: { email: 'a@example.com', code: 'wrong', new_password: 'a sufficiently long password' } });
   assert.equal(response.statusCode, 429);
+});
+
+test('mobile status is scoped; create/edit/delete preserve desktop data and retry receipts', async t => {
+  const { request, b, repository } = await fixture(t);
+  const upload = async (path, contents) => {
+    const bytes = Buffer.from(contents); const digest = sha256(bytes);
+    assert.equal((await request('PUT', `/v1/blobs/${digest}?path=${path}`, bytes, undefined, true)).statusCode, 204);
+    return digest;
+  };
+  const pc = await upload('notes/pc.md', 'desktop');
+  await request('PUT', '/v1/manifest', { expected_revision: 0, entries: { 'notes/pc.md': pc, 'expenses/pc.json': pc } });
+  const path = 'scraps/phone.md'; const digest = await upload(path, 'phone');
+  const create = { operation_id: 'create-phone-operation', path, base: null, digest, assets: {} };
+  assert.equal((await request('POST', '/v1/capture', create)).statusCode, 200);
+  assert.equal((await request('POST', '/v1/capture', create)).statusCode, 200);
+  assert.equal((await repository.manifest('a')).revision, 2);
+  assert.deepEqual((await request('POST', '/v1/capture/status', { paths: [path] })).json(), { entries: { [path]: digest } });
+  assert.deepEqual((await request('POST', '/v1/capture/status', { paths: [path] }, b)).json(), { entries: { [path]: null } });
+  for (const paths of [['notes/pc.md'], ['expenses/pc.json'], ['../secret'], Array(101).fill(path)]) {
+    assert.equal((await request('POST', '/v1/capture/status', { paths })).statusCode, 400);
+  }
+  const edited = await upload(path, 'edited phone');
+  assert.equal((await request('POST', '/v1/capture', { ...create, operation_id: 'edit-phone-operation', base: digest, digest: edited })).statusCode, 200);
+  assert.equal((await request('POST', '/v1/capture', { ...create, operation_id: 'stale-phone-operation', digest: pc })).json().code, 'capture_conflict');
+  assert.equal((await request('POST', '/v1/capture', { ...create, operation_id: 'delete-phone-operation', base: edited, digest: null })).statusCode, 200);
+  assert.equal((await request('POST', '/v1/capture', create)).statusCode, 200);
+  assert.deepEqual((await repository.manifest('a')).entries, { 'notes/pc.md': pc, 'expenses/pc.json': pc });
+  assert.equal((await request('POST', '/v1/capture', { ...create, digest: edited })).json().code, 'operation_reused');
+  assert.equal((await request('POST', '/v1/capture', { ...create, operation_id: 'missing-blob-operation', digest: 'f'.repeat(64) })).json().code, 'missing_blob');
+  assert.equal((await request('POST', '/v1/capture', { ...create, path: 'notes/pc.md' })).statusCode, 400);
+  assert.equal((await request('POST', '/v1/capture', { ...create, assets: { 'expenses/a.json': pc } })).statusCode, 400);
 });

@@ -28,3 +28,14 @@ CREATE TABLE IF NOT EXISTS password_resets (
   expires_at timestamptz NOT NULL,
   issued_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Receipts survive later PC edits/deletions: retrying an acknowledged upload
+-- must never recreate a deleted scrap or overwrite a more recent edit.
+CREATE TABLE IF NOT EXISTS capture_receipts (
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  operation_id text NOT NULL,
+  fingerprint text NOT NULL,
+  result jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(user_id, operation_id)
+);

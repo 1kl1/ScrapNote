@@ -77,6 +77,7 @@ class SyncClient {
     Uint8List? bytes,
     Map<String, String>? query,
     bool authenticated = true,
+    Duration timeout = const Duration(minutes: 3),
   }) async {
     final request = http.Request(
       method,
@@ -97,13 +98,9 @@ class SyncClient {
       request.headers['Content-Type'] = 'application/octet-stream';
       request.bodyBytes = bytes;
     }
-    final response = await _http
-        .send(request)
-        .timeout(const Duration(minutes: 3));
+    final response = await _http.send(request).timeout(timeout);
     final builder = BytesBuilder(copy: false);
-    await for (final chunk in response.stream.timeout(
-      const Duration(minutes: 3),
-    )) {
+    await for (final chunk in response.stream.timeout(timeout)) {
       builder.add(chunk);
       if (builder.length > 25 * 1024 * 1024 + 16384) {
         throw const FormatException('서버 응답이 허용 크기를 초과했습니다.');
@@ -149,7 +146,19 @@ class SyncClient {
         );
       }
       if (response.statusCode == 409) {
+        if (code == 'capture_conflict') {
+          throw const SyncAuthException(
+            '다른 기기에서 이 scrap을 변경했습니다.',
+            code: 'capture_conflict',
+          );
+        }
         throw const FormatException('다른 기기가 먼저 동기화했습니다. 다시 시도해 주세요.');
+      }
+      if (response.statusCode == 404 && path.startsWith('/v1/capture')) {
+        throw const SyncAuthException(
+          '서버에 모바일 업로드 기능 업데이트가 필요합니다. 기기에 저장된 내용은 유지됩니다.',
+          code: 'capture_unavailable',
+        );
       }
       throw SyncAuthException(
         response.statusCode == 429
@@ -166,6 +175,7 @@ class SyncClient {
     String path, {
     Object? body,
     bool authenticated = true,
+    Duration timeout = const Duration(minutes: 3),
   }) async =>
       jsonDecode(
             utf8.decode(
@@ -174,6 +184,7 @@ class SyncClient {
                 path,
                 jsonBody: body,
                 authenticated: authenticated,
+                timeout: timeout,
               ),
             ),
           )

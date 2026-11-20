@@ -20,6 +20,7 @@ class ScrapnoteShell extends StatelessWidget {
     this.vaultPath,
     this.onChooseVault,
     this.onSync,
+    this.captureOnly = false,
     super.key,
   });
 
@@ -37,6 +38,7 @@ class ScrapnoteShell extends StatelessWidget {
   final VoidCallback? onChooseVault;
   final Widget body;
   final VoidCallback? onSync;
+  final bool captureOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -65,7 +67,7 @@ class ScrapnoteShell extends StatelessWidget {
           actions: <Type, Action<Intent>>{
             _SelectSectionIntent: CallbackAction<_SelectSectionIntent>(
               onInvoke: (intent) {
-                if (intent.section != section) {
+                if (!captureOnly && intent.section != section) {
                   onSectionChanged(intent.section);
                 }
                 return null;
@@ -94,13 +96,17 @@ class ScrapnoteShell extends StatelessWidget {
                               child: body,
                             ),
                           );
-                          if (compact) {
+                          if (compact || captureOnly) {
                             return Column(
                               children: [
                                 Row(
                                   children: [
                                     const SizedBox(width: 12),
-                                    Expanded(child: Text(section.label)),
+                                    Expanded(
+                                      child: Text(
+                                        captureOnly ? '내 Scrap' : section.label,
+                                      ),
+                                    ),
                                     if (onSync != null) _syncButton(),
                                     if (vaultPath == null || onSync == null)
                                       _VaultFooter(
@@ -110,8 +116,9 @@ class ScrapnoteShell extends StatelessWidget {
                                   ],
                                 ),
                                 Expanded(child: content),
-                                if (MediaQuery.viewInsetsOf(context).bottom ==
-                                    0)
+                                if (!captureOnly &&
+                                    MediaQuery.viewInsetsOf(context).bottom ==
+                                        0)
                                   FBottomNavigationBar(
                                     key: const ValueKey('bottom-navigation'),
                                     index: section.index,

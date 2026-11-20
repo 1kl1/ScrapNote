@@ -54,6 +54,8 @@ class ScrapsView extends StatefulWidget {
     this.onRetryLocation,
     this.onSetManualLocation,
     this.onOpenLocationSettings,
+    this.captureStatuses = const {},
+    this.captureOnly = false,
     super.key,
   });
 
@@ -81,6 +83,8 @@ class ScrapsView extends StatefulWidget {
   final VoidCallback? onRetryLocation;
   final ValueChanged<ScrapLocation>? onSetManualLocation;
   final VoidCallback? onOpenLocationSettings;
+  final Map<String, String> captureStatuses;
+  final bool captureOnly;
 
   @override
   State<ScrapsView> createState() => _ScrapsViewState();
@@ -148,6 +152,8 @@ class _ScrapsViewState extends State<ScrapsView> {
             onCreate: widget.onNewDocument,
             onChooseImages: widget.onChooseImages,
             listBuilder: (showEditor) => _InboxHierarchy(
+              captureStatuses: widget.captureStatuses,
+              captureOnly: widget.captureOnly,
               scraps: scraps,
               onDeleteScrap: widget.onDeleteScrap,
               selectedScrapId: widget.activeScrapId,
@@ -220,6 +226,8 @@ class _InboxHierarchy extends StatelessWidget {
     required this.selectedScrapId,
     required this.onNewDocument,
     required this.onScrapSelected,
+    required this.captureStatuses,
+    required this.captureOnly,
   });
 
   final ValueChanged<String>? onDeleteScrap;
@@ -227,6 +235,8 @@ class _InboxHierarchy extends StatelessWidget {
   final String? selectedScrapId;
   final VoidCallback onNewDocument;
   final ValueChanged<String> onScrapSelected;
+  final Map<String, String> captureStatuses;
+  final bool captureOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -299,6 +309,10 @@ class _InboxHierarchy extends StatelessWidget {
                             ),
                           ],
                           child: _ScrapHierarchyRow(
+                            status: captureStatuses[scrap.id],
+                            onDelete: captureOnly && onDeleteScrap != null
+                                ? () => onDeleteScrap!(scrap.id)
+                                : null,
                             scrap: scrap,
                             selected: scrap.id == selectedScrapId,
                             onPressed: () => onScrapSelected(scrap.id),
@@ -337,11 +351,15 @@ class _ScrapHierarchyRow extends StatelessWidget {
     required this.scrap,
     required this.selected,
     required this.onPressed,
+    this.status,
+    this.onDelete,
   });
 
   final Scrap scrap;
   final bool selected;
   final VoidCallback onPressed;
+  final String? status;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -371,33 +389,54 @@ class _ScrapHierarchyRow extends StatelessWidget {
                 ),
               ),
             ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: selected
-                        ? ScrapnoteTokens.charcoal
-                        : ScrapnoteTokens.charcoalSoft,
-                    fontSize: 12,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: selected
+                              ? ScrapnoteTokens.charcoal
+                              : ScrapnoteTokens.charcoalSoft,
+                          fontSize: 12,
+                          fontWeight: selected
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        status ?? _formatTimestamp(scrap.updatedAt),
+                        maxLines: 1,
+                        style: const TextStyle(
+                          color: ScrapnoteTokens.mutedInk,
+                          fontFamily: 'monospace',
+                          fontSize: 10,
+                          fontFeatures: <FontFeature>[
+                            FontFeature.tabularFigures(),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  _formatTimestamp(scrap.updatedAt),
-                  maxLines: 1,
-                  style: const TextStyle(
-                    color: ScrapnoteTokens.mutedInk,
-                    fontFamily: 'monospace',
-                    fontSize: 10,
-                    fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                if (onDelete != null)
+                  SizedBox.square(
+                    dimension: 48,
+                    child: FButton.icon(
+                      key: ValueKey('delete-capture-${scrap.id}'),
+                      variant: FButtonVariant.ghost,
+                      onPress: onDelete,
+                      semanticsLabel: 'Scrap 삭제',
+                      child: const Icon(FLucideIcons.trash2, size: 16),
+                    ),
                   ),
-                ),
               ],
             ),
           ),

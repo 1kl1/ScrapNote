@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { hashPassword } from './auth.js';
 import { ApiError } from './protocol.js';
+import { mergeCapture } from './capture.js';
 export class Repository {
   constructor(connectionString) { this.pool = new pg.Pool({ connectionString, max: 8 }); }
   async initialize(email, password) {
@@ -62,6 +63,35 @@ export class Repository {
   }
   async blob(owner, digest) {
     return (await this.pool.query('SELECT * FROM vault_blobs WHERE user_id=$1 AND digest=$2', [owner, digest])).rows[0];
+  }
+  async captureStatus(owner, paths) {
+    const { rows } = await this.pool.query(`SELECT p.path, m.entries->>p.path AS digest
+      FROM unnest($2::text[]) AS p(path)
+      LEFT JOIN vault_manifests m ON m.user_id=$1`, [owner, paths]);
+    return Object.fromEntries(rows.map(row => [row.path, row.digest]));
+  }
+  async capture(owner, change) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('INSERT INTO vault_manifests(user_id) VALUES($1) ON CONFLICT DO NOTHING', [owner]);
+      const current = (await client.query('SELECT revision,entries FROM vault_manifests WHERE user_id=$1 FOR UPDATE', [owner])).rows[0];
+      const receipt = (await client.query('SELECT fingerprint,result FROM capture_receipts WHERE user_id=$1 AND operation_id=$2', [owner, change.operation])).rows[0];
+      if (receipt) {
+        if (receipt.fingerprint !== change.fingerprint) throw new ApiError(409, 'operation_reused', '전송 식별자가 다른 내용에 사용되었습니다.');
+        await client.query('COMMIT'); return receipt.result;
+      }
+      const entries = mergeCapture(current.entries, change);
+      const digests = [...new Set([change.digest, ...Object.values(change.assets)].filter(Boolean))];
+      const found = await client.query('SELECT digest,zipline_id FROM vault_blobs WHERE user_id=$1 AND digest=ANY($2::text[])', [owner, digests]);
+      if (found.rowCount !== digests.length) throw new ApiError(400, 'missing_blob', 'Upload all files before committing.');
+      const images = new Set(found.rows.filter(row => row.zipline_id).map(row => row.digest));
+      if (Object.values(change.assets).some(digest => !images.has(digest))) throw new ApiError(400, 'invalid_storage', 'Image assets must be stored in Zipline.');
+      const result = { digest: change.digest };
+      await client.query('UPDATE vault_manifests SET revision=revision+1, entries=$2, updated_at=now() WHERE user_id=$1', [owner, JSON.stringify(entries)]);
+      await client.query('INSERT INTO capture_receipts(user_id,operation_id,fingerprint,result) VALUES($1,$2,$3,$4)', [owner, change.operation, change.fingerprint, JSON.stringify(result)]);
+      await client.query('COMMIT'); return result;
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
   async storeBlob(owner, digest, bytes, uploadImage) {
     const client = await this.pool.connect();

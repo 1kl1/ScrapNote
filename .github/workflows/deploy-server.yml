@@ -54,8 +54,6 @@ jobs:
           trap 'rm -rf "$build_dir"; rm -f "$archive"' EXIT
           tar -xzf "$archive" -C "$build_dir"
           docker build -t scrapnote-api:candidate "$build_dir"
-          docker image tag scrapnote-api:1.0.0 scrapnote-api:previous
-          docker image tag scrapnote-api:candidate scrapnote-api:1.0.0
           compose() {
             sudo -n sh -c 'cd /data/coolify/services/e7aoqro0dfik9uxwx9lxnwfq && docker compose "$@"' -- "$@"
           }
@@ -69,13 +67,29 @@ jobs:
             done
             return 1
           }
+          rollback_available=false
+          current_id=$(compose ps -q api)
+          if [ -n "$current_id" ]; then
+            current_image=$(docker container inspect --format '{{.Image}}' "$current_id")
+          else
+            current_image=$(docker image inspect --format '{{.Id}}' scrapnote-api:1.0.0 2>/dev/null) || current_image=''
+          fi
+          if [ -n "$current_image" ]; then
+            docker image tag "$current_image" scrapnote-api:previous
+            rollback_available=true
+          fi
+          docker image tag scrapnote-api:candidate scrapnote-api:1.0.0
           if compose up -d --no-deps --force-recreate api && healthy; then
             echo 'API deployment is healthy.'
           else
-            echo 'Deployment failed; restoring previous image.' >&2
-            docker image tag scrapnote-api:previous scrapnote-api:1.0.0
-            compose up -d --no-deps --force-recreate api
-            healthy || echo 'Rollback did not become healthy; inspect Coolify.' >&2
+            if [ "$rollback_available" = true ]; then
+              echo 'Deployment failed; restoring previous image.' >&2
+              docker image tag scrapnote-api:previous scrapnote-api:1.0.0
+              compose up -d --no-deps --force-recreate api
+              healthy || echo 'Rollback did not become healthy; inspect Coolify.' >&2
+            else
+              echo 'Deployment failed; no previous image is available for rollback.' >&2
+            fi
             exit 1
           fi
           REMOTE
