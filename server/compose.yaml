@@ -13,7 +13,6 @@ services:
       - SMTP_FROM=${SMTP_FROM:-}
       - ZIPLINE_URL=${ZIPLINE_URL}
       - ZIPLINE_TOKEN=${ZIPLINE_TOKEN}
-      - ZIPLINE_PASSWORD_KEY=${ZIPLINE_PASSWORD_KEY}
     expose:
       - '8080'
     depends_on:

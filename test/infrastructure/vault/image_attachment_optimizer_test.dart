@@ -70,6 +70,41 @@ void main() {
 
   tearDown(() => sandbox.delete(recursive: true));
 
+  test('compresses photos below 8 MiB with the default settings', () async {
+    expect(sourceBytes.length, lessThan(8 * 1024 * 1024));
+
+    final result = await const ImageAttachmentOptimizer().optimize(portrait);
+
+    expect(result, isNotNull);
+    expect(result!.bytes.length, lessThan(sourceBytes.length));
+    expect(result.extension, '.jpg');
+    final decoded = img.decodeJpg(result.bytes)!;
+    expect(decoded.width, 300);
+    expect(decoded.height, 600);
+    expect(await portrait.readAsBytes(), sourceBytes);
+  });
+
+  test(
+    'keeps a small original when compression would increase its size',
+    () async {
+      final source = File(p.join(sandbox.path, 'tiny.png'));
+      final bytes = img.encodePng(img.Image(width: 1, height: 1));
+      await source.writeAsBytes(bytes);
+
+      expect(await const ImageAttachmentOptimizer().optimize(source), isNull);
+      expect(await source.readAsBytes(), bytes);
+    },
+  );
+
+  test('keeps an unreadable small image without failing the import', () async {
+    final source = File(p.join(sandbox.path, 'unreadable.jpg'));
+    final bytes = [1, 2, 3];
+    await source.writeAsBytes(bytes);
+
+    expect(await const ImageAttachmentOptimizer().optimize(source), isNull);
+    expect(await source.readAsBytes(), bytes);
+  });
+
   test(
     'compresses a portrait without rotating or touching the source',
     () async {
@@ -89,6 +124,25 @@ void main() {
       expect(await portrait.readAsBytes(), sourceBytes);
     },
   );
+
+  test('bakes EXIF rotation without rotating the saved JPEG twice', () async {
+    final image = img.decodePng(Uint8List.fromList(sourceBytes))!;
+    image.exif.imageIfd.orientation = 6;
+    final source = File(p.join(sandbox.path, 'rotated.jpg'));
+    final bytes = img.encodeJpg(image, quality: 100);
+    await source.writeAsBytes(bytes);
+
+    final result = await const ImageAttachmentOptimizer(
+      maxDimension: 120,
+    ).optimize(source);
+
+    expect(result, isNotNull);
+    final decoded = img.decodeJpg(result!.bytes)!;
+    expect(decoded.width, 120);
+    expect(decoded.height, 60);
+    expect(decoded.exif.imageIfd.hasOrientation, isFalse);
+    expect(await source.readAsBytes(), bytes);
+  });
 
   test('preserves transparency when compression is needed', () async {
     final transparent = img.Image(width: 100, height: 200, numChannels: 4);
@@ -259,7 +313,7 @@ void main() {
   );
 
   test(
-    'photo GPS survives import compression and reopening without source EXIF',
+    'photo GPS and time survive compression in both the JPEG and document',
     () async {
       final source = await writePhoto(File('${sandbox.path}/gps.jpg'));
       final repository = VaultRepository(
@@ -280,13 +334,12 @@ void main() {
         ),
       );
       expect(await stored.length(), lessThan(await source.length()));
-      expect(
-        await const PhotoLocationReader().read(
-          stored,
-          fallbackTime: saved.createdAt,
-        ),
-        isNull,
+      final storedLocation = await const PhotoLocationReader().read(
+        stored,
+        fallbackTime: saved.createdAt,
       );
+      expect(storedLocation, saved.locations.single);
+      expect(storedLocation!.capturedAt, DateTime.utc(2026, 9, 4, 9, 2, 3));
       await source.delete();
       expect(saved.locations.single.latitude, 37.5);
       expect((await repository.listScraps()).single.locations, saved.locations);
@@ -376,6 +429,27 @@ void main() {
     expect(await portrait.readAsBytes(), sourceBytes);
   });
 
+  test('Scraps and Notes compress small photos by default', () async {
+    final vault = Directory(p.join(sandbox.path, 'vault'));
+    final scrap = await VaultRepository(
+      vault,
+    ).createScrap('', attachmentPaths: [portrait.path]);
+    final note = await NoteRepository(
+      vault,
+    ).createNote('', folder: '', attachmentPaths: [portrait.path]);
+
+    expect(scrap.assets.single.hash, note.assets.single.hash);
+    expect(scrap.assets.single.mimeType, 'image/jpeg');
+    expect(note.assets.single.mimeType, 'image/jpeg');
+    final stored = File(
+      p.normalize(
+        p.join(vault.path, 'scraps', scrap.assets.single.relativePath),
+      ),
+    );
+    expect(await stored.length(), lessThan(sourceBytes.length));
+    expect(await portrait.readAsBytes(), sourceBytes);
+  });
+
   test('Scraps and Notes store compressed HEIC attachments as JPEG', () async {
     final heic = File(p.join(sandbox.path, 'portrait.heic'));
     await heic.writeAsBytes(sourceBytes);
@@ -421,8 +495,12 @@ void main() {
     'existing oversized photos are relinked and backed up before sync',
     () async {
       final vault = Directory(p.join(sandbox.path, 'vault'));
-      final scrapRepo = VaultRepository(vault);
-      final noteRepo = NoteRepository(vault);
+      // Simulate attachments saved before small photos were compressed.
+      const legacyOptimizer = ImageAttachmentOptimizer(
+        triggerBytes: 8 * 1024 * 1024,
+      );
+      final scrapRepo = VaultRepository(vault, imageOptimizer: legacyOptimizer);
+      final noteRepo = NoteRepository(vault, imageOptimizer: legacyOptimizer);
       await noteRepo.createFolder('Trips');
       await noteRepo.createFolder('Seoul', parent: 'Trips');
       final body = InlineImage.markdown(portrait.path);

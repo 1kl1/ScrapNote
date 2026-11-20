@@ -9,10 +9,10 @@ import 'package:path/path.dart' as p;
 typedef HeicEncoder = Future<Uint8List?> Function(String path, int dimension);
 
 /// The sync server accepts at most 25 MiB per blob. Keep some headroom for
-/// photos while leaving already-small attachments and their metadata intact.
+/// photos, keeping a compressed copy only when it is smaller than the original.
 class ImageAttachmentOptimizer {
   const ImageAttachmentOptimizer({
-    this.triggerBytes = 8 * 1024 * 1024,
+    this.triggerBytes = 0,
     this.maxBytes = 25 * 1024 * 1024,
     this.maxDimension = 4096,
     this.heicEncoder,
@@ -119,7 +119,7 @@ class ImageAttachmentOptimizer {
         rotate: 0,
         autoCorrectionAngle: true,
         format: CompressFormat.jpeg,
-        keepExif: false,
+        keepExif: true,
       );
 
   static OptimizedImage? _encode(
@@ -127,7 +127,13 @@ class ImageAttachmentOptimizer {
     int maxDimension,
     int maxBytes,
   ) {
-    final source = img.decodeImage(File(filePath).readAsBytesSync());
+    final img.Image? source;
+    try {
+      source = img.decodeImage(File(filePath).readAsBytesSync());
+    } catch (_) {
+      // Malformed or unsupported images should keep their original bytes.
+      return null;
+    }
     if (source == null || source.hasAnimation) return null;
 
     var upright = source;
@@ -157,9 +163,9 @@ class ImageAttachmentOptimizer {
               interpolation: img.Interpolation.linear,
             )
           : upright;
-      // Orientation is baked into pixels. Copying the original EXIF tag would
-      // rotate the saved image a second time in some viewers.
-      image.exif = img.ExifData();
+      // Keep photo metadata so equal pixels with different GPS/time metadata
+      // remain distinct assets. Rotation is already baked into the pixels.
+      image.exif.imageIfd.orientation = null;
       final transparent =
           image.hasAlpha && image.any((pixel) => pixel.aNormalized < 1);
       final bytes = transparent

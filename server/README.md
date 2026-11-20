@@ -8,7 +8,8 @@ Node 22 / Fastify 5와 PostgreSQL 16을 사용하는 개인 Vault 동기화 서�
 
 `.env.example`을 참고해 Coolify 환경 변수를 설정한다. DB 비밀번호는 URL에 안전한
 난수 문자열을 사용한다. `ZIPLINE_TOKEN`은 전용 일반 사용자 토큰이다.
-`ZIPLINE_PASSWORD_KEY`는 32자 이상의 영구 난수 키이며 사진 복구에 반드시 필요하다.
+사진은 파일별 비밀번호 없이 업로드하므로 Zipline 파일 URL을 아는 누구나 열람할 수 있다.
+앱의 문서·계정·동기화 API는 계속 로그인이 필요하다.
 
 ```sh
 npm ci
@@ -63,7 +64,8 @@ PostgreSQL 볼륨을 제거하는 `down -v`는 실행하지 않는다. API 외�
 ## 백업과 복구
 
 함께 보관할 항목은 PostgreSQL dump, Zipline의 DB와 업로드 저장소,
-`ZIPLINE_PASSWORD_KEY`·전용 토큰 등 운영 환경 변수, 로컬 Vault 전체 사본이다.
+전용 토큰 등 운영 환경 변수, 로컬 Vault 전체 사본이다.
+비밀번호 보호를 사용하던 과거 백업에는 당시 `ZIPLINE_PASSWORD_KEY`도 함께 보관한다.
 PostgreSQL dump만으로는 사진을 복원할 수 없다. Zipline 설정에서 업로드 파일의
 자동 삭제·만료·재압축을 활성화하지 않는다.
 
@@ -75,8 +77,9 @@ docker exec database-e7aoqro0dfik9uxwx9lxnwfq \
   pg_dump -U scrapnote -d scrapnote -Fc > scrapnote.dump
 ```
 
-복구 시 먼저 별도 PostgreSQL과 Zipline 저장소에 백업을 복원하고 같은 사진 비밀번호
-생성 키를 설정한다. `pg_restore --no-owner`로 새 Scrapnote DB에 복원한 뒤 API를
+복구 시 먼저 별도 PostgreSQL과 Zipline 저장소에 백업을 복원한다. 과거 비밀번호 보호
+사진을 복원했다면 Zipline에서 파일별 비밀번호를 해제한 뒤 현재 API에 연결한다.
+`pg_restore --no-owner`로 새 Scrapnote DB에 복원한 뒤 API를
 시작한다. 계정과 manifest, 모든 blob의 SHA-256이 일치하는지 확인하고 기기를 연결한다.
 원래 API 주소/사용자 ID를 유지하지 않으면 기존 Vault identity도 별도 이전해야 한다.
 
